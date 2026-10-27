@@ -1,0 +1,273 @@
+#include "crash.h"
+
+#include "game/game.h"
+#include "log.h"
+
+#include <crtdbg.h>
+#include <cstdint>
+#include <csignal>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <exception>
+#include <windows.h>
+#include <dbghelp.h>
+
+namespace
+{
+    LPTOP_LEVEL_EXCEPTION_FILTER g_previous = nullptr;
+    LONG g_dumped = 0;
+
+    // Dumps are written by a thread made at the start, with 32 MB of address space kept aside and let go just
+    // before (playthrough test, 2026-10-16: the friend's dumps failed with "device not functioning", likely as the
+    // game had run out of memory; a crashed thread writing its own dump is also what Windows advises against).
+    void* g_spare = nullptr;
+    HANDLE g_dumpWanted = nullptr, g_dumpDone = nullptr;
+    EXCEPTION_POINTERS* g_dumpInfo = nullptr;
+    DWORD g_dumpThread = 0;  // the thread the dump is about
+    char g_dumpPath[MAX_PATH];
+
+    void Dump(EXCEPTION_POINTERS* info, DWORD thread)
+    {
+        HANDLE file = CreateFileA(g_dumpPath, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+        if (file == INVALID_HANDLE_VALUE)
+            return LOG_ERROR("Couldn't make the crash dump file %s (error %lu)", g_dumpPath, GetLastError());
+        MINIDUMP_EXCEPTION_INFORMATION mei{thread, info, FALSE};
+        BOOL ok = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file,
+            static_cast<MINIDUMP_TYPE>(MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo),
+            info ? &mei : nullptr, nullptr, nullptr);
+        DWORD error = ok ? 0 : GetLastError();
+        CloseHandle(file);
+        if (ok)
+            LOG_ERROR("Crash dump written: %s (send it with this log)", g_dumpPath);
+        else
+            LOG_ERROR("Couldn't write the crash dump %s (error %08lX); the stack above is in the log", g_dumpPath,
+                error);
+    }
+
+    DWORD WINAPI DumpThread(void*)
+    {
+        WaitForSingleObject(g_dumpWanted, INFINITE);
+        Dump(g_dumpInfo, g_dumpThread);
+        SetEvent(g_dumpDone);
+        return 0;
+    }
+
+    void WriteDump(EXCEPTION_POINTERS* info)
+    {
+        if (InterlockedExchange(&g_dumped, 1) != 0)
+            return;  // one per run
+        SYSTEMTIME t;
+        GetLocalTime(&t);
+        std::snprintf(g_dumpPath, sizeof(g_dumpPath), "NVCoop-crash-%04d%02d%02d-%02d%02d%02d.dmp",
+            t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+        if (g_spare)
+        {
+            VirtualFree(g_spare, 0, MEM_RELEASE);
+            g_spare = nullptr;
+        }
+        if (g_dumpWanted && g_dumpDone)
+        {
+            g_dumpInfo = info;
+            g_dumpThread = GetCurrentThreadId();
+            SetEvent(g_dumpWanted);
+            if (WaitForSingleObject(g_dumpDone, 60000) == WAIT_OBJECT_0)
+                return;
+            LOG_ERROR("The crash dump took over a minute; going on without it");
+            return;
+        }
+        Dump(info, GetCurrentThreadId());
+    }
+
+    // A dump of where we are now, for errors that aren't exceptions (the C++ runtime stopping the game).
+    // (No C++ objects here: __try needs a plain function.)
+    void DumpHere()
+    {
+        __try
+        {
+            RaiseException(0xE0C00000, 0, 0, nullptr);  // our own code: "NVCoop: runtime error"
+        }
+        __except (WriteDump(GetExceptionInformation()), EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+    }
+
+    bool IsCode(uintptr_t v)
+    {
+        MEMORY_BASIC_INFORMATION m;
+        return v > 0x10000 && VirtualQuery(reinterpret_cast<void*>(v), &m, sizeof(m)) && m.State == MEM_COMMIT &&
+            (m.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
+    }
+
+    // Code addresses on the crashed thread's stack, nearest first: most are where calls return to, so they show the
+    // call chain. (No C++ objects here: __try needs a plain function.)
+    int ScanStack(uintptr_t esp, uintptr_t* out, int max)
+    {
+        int n = 0;
+        __try
+        {
+            for (uintptr_t p = esp; p < esp + 0x4000 && n < max; p += 4)
+            {
+                uintptr_t v = *reinterpret_cast<const uintptr_t*>(p);
+                if (IsCode(v))
+                    out[n++] = v;
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+        return n;
+    }
+
+    // "FalloutNV.exe+6A55A6" (our own DLL's as an offset the map file names).
+    void Describe(uintptr_t address, char* out, size_t size)
+    {
+        HMODULE module = nullptr;
+        char path[MAX_PATH] = "?";
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCSTR>(address), &module))
+            GetModuleFileNameA(module, path, MAX_PATH);
+        const char* name = std::strrchr(path, '\\');
+        std::snprintf(out, size, "%s+%lX", name ? name + 1 : path,
+            static_cast<unsigned long>(address - reinterpret_cast<uintptr_t>(module)));
+    }
+
+    void LogStack(const CONTEXT* c)
+    {
+        LOG_ERROR("Registers: eax=%08lX ebx=%08lX ecx=%08lX edx=%08lX esi=%08lX edi=%08lX ebp=%08lX esp=%08lX", c->Eax,
+            c->Ebx, c->Ecx, c->Edx, c->Esi, c->Edi, c->Ebp, c->Esp);
+        uintptr_t found[32];
+        int n = ScanStack(c->Esp, found, 32);
+        std::string line;
+        char one[96];
+        for (int i = 0; i < n; ++i)
+        {
+            Describe(found[i], one, sizeof(one));
+            line += (line.empty() ? "" : ", ") + std::string(one);
+            if ((i + 1) % 8 == 0 || i + 1 == n)
+            {
+                LOG_ERROR("Stack: %s", line.c_str());
+                line.clear();
+            }
+        }
+    }
+
+    LONG WINAPI OnCrash(EXCEPTION_POINTERS* info)
+    {
+        static LONG once = 0;
+        if (InterlockedExchange(&once, 1) == 0)
+        {
+            void* address = info->ExceptionRecord->ExceptionAddress;
+            HMODULE module = nullptr;
+            char moduleName[MAX_PATH] = "unknown";
+            if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                    static_cast<LPCSTR>(address), &module))
+                GetModuleFileNameA(module, moduleName, MAX_PATH);
+            auto offset = reinterpret_cast<uintptr_t>(address) - reinterpret_cast<uintptr_t>(module);
+            LOG_ERROR("CRASH: code %08lX at %p (%s + %lX)", info->ExceptionRecord->ExceptionCode, address,
+                moduleName, static_cast<unsigned long>(offset));
+            const EXCEPTION_RECORD* e = info->ExceptionRecord;
+            if (e->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && e->NumberParameters >= 2)
+                LOG_ERROR("It %s memory at %08lX", e->ExceptionInformation[0] == 0 ? "read" :
+                    e->ExceptionInformation[0] == 1 ? "wrote" : "ran", static_cast<unsigned long>(e->ExceptionInformation[1]));
+            LogStack(info->ContextRecord);
+            AddressSpace a = GetAddressSpace();
+            LOG_ERROR("Address space: %u MB free of %u (4 GB patch: %s)", a.freeMb, a.totalMb, a.large ? "yes" : "NO");
+            // (Two friends' games crashed drawing the world just after a menu opened, 2026-10-19: which one?)
+            char menus[96];
+            game::OpenMenus(menus, sizeof(menus));
+            LOG_ERROR("Menus open: %s", menus[0] ? menus : "none");
+            WriteDump(info);
+        }
+        return g_previous ? g_previous(info) : EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    // The C++ runtime giving up. (2026-10-10: the host's game stopped loading a save with the runtime's "Abort"
+    // popup; nothing was logged, as it isn't an exception.)
+#ifdef _DEBUG
+    int __cdecl OnRuntimeReport(int type, char* message, int* returnValue)
+    {
+        if (type == _CRT_WARN)
+            return FALSE;
+        LOG_ERROR("C++ runtime %s: %s", type == _CRT_ASSERT ? "check failed" : "error", message ? message : "");
+        static int dumps = 0;
+        if (dumps++ < 3)
+            DumpHere();
+        if (returnValue)
+            *returnValue = 0;
+        // Handled: the game goes on. (Playthrough test, 2026-10-16: a stack check after the game's load, likely
+        // another plugin's hook upsetting the register the check keeps the stack in, ended the game. Debug builds
+        // only; a real problem still crashes, and the crash reporter has it.)
+        return TRUE;
+    }
+#endif
+
+    void __cdecl OnAbort(int)
+    {
+        LOG_ERROR("C++ runtime: abort() called");
+        DumpHere();
+    }
+
+    void OnTerminate()
+    {
+        LOG_ERROR("C++ runtime: an error was never caught (std::terminate)");
+        DumpHere();
+        std::abort();
+    }
+
+    void __cdecl OnInvalidParameter(const wchar_t* expression, const wchar_t* function, const wchar_t* file,
+        unsigned int line, uintptr_t)
+    {
+        LOG_ERROR("C++ runtime: invalid parameter (%ls in %ls, %ls:%u)", expression ? expression : L"?",
+            function ? function : L"?", file ? file : L"?", line);
+        DumpHere();
+    }
+}
+
+AddressSpace GetAddressSpace()
+{
+    AddressSpace a;
+    auto* image = reinterpret_cast<const uint8_t*>(GetModuleHandleA(nullptr));
+    auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
+    auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(image + dos->e_lfanew);
+    a.large = (nt->FileHeader.Characteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) != 0;
+    MEMORYSTATUSEX m{sizeof(m)};
+    if (GlobalMemoryStatusEx(&m))
+    {
+        a.freeMb = static_cast<unsigned>(m.ullAvailVirtual >> 20);
+        a.totalMb = static_cast<unsigned>(m.ullTotalVirtual >> 20);
+    }
+    return a;
+}
+
+void InstallCrashReporter()
+{
+    g_spare = VirtualAlloc(nullptr, 32 << 20, MEM_RESERVE, PAGE_NOACCESS);
+    g_dumpWanted = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    g_dumpDone = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    if (g_dumpWanted && g_dumpDone)
+    {
+        if (HANDLE thread = CreateThread(nullptr, 256 * 1024, DumpThread, nullptr, 0, nullptr))
+            CloseHandle(thread);
+        else
+            g_dumpWanted = g_dumpDone = nullptr;  // (then the crashed thread writes it)
+    }
+    g_previous = SetUnhandledExceptionFilter(OnCrash);
+#ifdef _DEBUG
+    _CrtSetReportHook2(_CRT_RPTHOOK_INSTALL, OnRuntimeReport);
+#endif
+    std::signal(SIGABRT, OnAbort);
+    std::set_terminate(OnTerminate);
+    _set_invalid_parameter_handler(OnInvalidParameter);
+}
+
+void CheckCrashReporter()
+{
+    LPTOP_LEVEL_EXCEPTION_FILTER current = SetUnhandledExceptionFilter(OnCrash);
+    if (current == OnCrash)
+        return;
+    // (2026-10-10: the host crashed loading a save and ours never ran.)
+    LOG_WARN("Something replaced our crash reporter; put it back in front (theirs still runs after ours)");
+    g_previous = current;
+}

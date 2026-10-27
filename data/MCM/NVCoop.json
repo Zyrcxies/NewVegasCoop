@@ -1,0 +1,335 @@
+{
+	"modName": "NVCoop",
+	"displayName": "New Vegas Co-op",
+	"description": "Settings for New Vegas Co-op",
+	"saveFile": "NVCoop.ini",
+	"minMCMVersion": 1.0,
+	"minModVersion": 1.0,
+	"submenus": {
+		"0": {
+			"listTitle": "Settings",
+			"pageTitle": "New Vegas Co-op",
+			"columns": 1,
+			"enable": 1,
+			"options": {
+				"1": {
+					"title": "Chat",
+					"enable": 1,
+					"type": 0
+				},
+				"2": {
+					"title": "Text Chat",
+					"type": 5,
+					"enable": 1,
+					"mouse": "Chat lines float above the player who said them",
+					"vars": [
+						{
+							"configINI": "Settings:bChat",
+							"default": 1
+						}
+					]
+				},
+				"3": {
+					"title": "Chat Key",
+					"type": 3,
+					"enable": 1,
+					"mouse": "The key that opens the chat line (Enter sends, Esc cancels)",
+					"vars": [
+						{
+							"configINI": "Settings:iChatKey",
+							"default": 21
+						}
+					],
+					"keybind": {
+						"type": 0
+					}
+				},
+				"4": {
+					"title": "Text-to-Speech",
+					"enable": 1,
+					"type": 0
+				},
+				"5": {
+					"title": "Read Chat Out Loud",
+					"type": 5,
+					"enable": 1,
+					"mouse": "Chat lines are spoken from where the player is: louder near, to the side they're on",
+					"vars": [
+						{
+							"configINI": "Settings:bChatSpeech",
+							"default": 1
+						}
+					]
+				},
+				"6": {
+					"title": "Speech Volume",
+					"type": 2,
+					"enable": 1,
+					"mouse": "How loud chat lines are read out",
+					"vars": [
+						{
+							"configINI": "Settings:iChatSpeechVolume",
+							"default": 80
+						}
+					],
+					"scale": {
+						"valueDecimal": 0,
+						"valueIncrement": 5,
+						"valueMin": 0,
+						"valueMax": 100,
+						"suffix": "%"
+					}
+				},
+				"7": {
+					"title": "Your Voice",
+					"type": 1,
+					"enable": 1,
+					"mouse": "The voice everyone hears your chat lines in",
+					"vars": [
+						{
+							"configINI": "Settings:iVoice",
+							"default": 0
+						}
+					],
+					"strings": [
+						"Male",
+						"Female"
+					]
+				},
+				"8": {
+					"title": "Which Voice",
+					"type": 1,
+					"enable": 1,
+					"mouse": "If a PC has more than one voice of that kind, which one (Windows usually has one of each)",
+					"vars": [
+						{
+							"configINI": "Settings:iVoiceVariant",
+							"default": 0
+						}
+					],
+					"strings": [
+						"First",
+						"Second",
+						"Third",
+						"Fourth"
+					]
+				},
+				"9": {
+					"title": "Your Voice's Pitch",
+					"type": 2,
+					"enable": 1,
+					"mouse": "Lower or higher than the voice's own",
+					"vars": [
+						{
+							"configINI": "Settings:iVoicePitch",
+							"default": 0
+						}
+					],
+					"scale": {
+						"valueDecimal": 0,
+						"valueIncrement": 1,
+						"valueMin": -10,
+						"valueMax": 10
+					}
+				},
+				"10": {
+					"title": "Your Voice's Speed",
+					"type": 2,
+					"enable": 1,
+					"mouse": "Slower or faster than the voice's own",
+					"vars": [
+						{
+							"configINI": "Settings:iVoiceSpeed",
+							"default": 0
+						}
+					],
+					"scale": {
+						"valueDecimal": 0,
+						"valueIncrement": 1,
+						"valueMin": -10,
+						"valueMax": 10
+					}
+				},
+				"11": {
+					"title": "Voice Effect",
+					"type": 1,
+					"enable": 1,
+					"mouse": "Radio: a crackly walkie-talkie. Robot: metallic. Echo. Megaphone: loud and harsh",
+					"vars": [
+						{
+							"configINI": "Settings:iVoiceEffect",
+							"default": 0
+						}
+					],
+					"strings": [
+						"None",
+						"Radio",
+						"Robot",
+						"Echo",
+						"Megaphone"
+					]
+				},
+				"12": {
+					"title": "Voice Chat",
+					"enable": 1,
+					"type": 0
+				},
+				"13": {
+					"title": "Voice Chat",
+					"type": 5,
+					"enable": 1,
+					"mouse": "Talk to the others with your microphone (through Steam's voice), heard from where you are",
+					"vars": [
+						{
+							"configINI": "Settings:bVoiceChat",
+							"default": 1
+						}
+					]
+				},
+				"14": {
+					"title": "Talk Mode",
+					"type": 1,
+					"enable": 1,
+					"mouse": "Push to talk: hold the key to talk. Open mic: always on (Steam leaves out the silence)",
+					"vars": [
+						{
+							"configINI": "Settings:iVoiceChatMode",
+							"default": 0
+						}
+					],
+					"strings": [
+						"Push to Talk",
+						"Open Mic"
+					]
+				},
+				"15": {
+					"title": "Push-to-Talk Key",
+					"type": 3,
+					"enable": 1,
+					"mouse": "Hold it to talk",
+					"vars": [
+						{
+							"configINI": "Settings:iVoiceChatKey",
+							"default": 48
+						}
+					],
+					"keybind": {
+						"type": 0
+					}
+				},
+				"16": {
+					"title": "Voice Volume",
+					"type": 2,
+					"enable": 1,
+					"mouse": "How loud the others' voices are",
+					"vars": [
+						{
+							"configINI": "Settings:iVoiceChatVolume",
+							"default": 100
+						}
+					],
+					"scale": {
+						"valueDecimal": 0,
+						"valueIncrement": 5,
+						"valueMin": 0,
+						"valueMax": 100,
+						"suffix": "%"
+					}
+				},
+				"17": {
+					"title": "Mouths Move When Talking",
+					"type": 5,
+					"enable": 1,
+					"mouse": "A player's character opens and shuts its mouth while they talk or their chat line is read out",
+					"vars": [
+						{
+							"configINI": "Settings:bMouths",
+							"default": 1
+						}
+					]
+				},
+				"18": {
+					"title": "New Game",
+					"enable": 1,
+					"type": 0
+				},
+				"19": {
+					"title": "Skip DLC Intro Popups",
+					"type": 5,
+					"enable": 1,
+					"mouse": "The DLCs' and Courier's Stash packs' boxes when you leave Doc Mitchell's house aren't shown (you still get everything)",
+					"vars": [
+						{
+							"configINI": "Settings:bSkipDlcPopups",
+							"default": 1
+						}
+					]
+				},
+				"20": {
+					"title": "World",
+					"enable": 1,
+					"type": 0
+				},
+				"21": {
+					"title": "Synced Radio",
+					"type": 5,
+					"enable": 1,
+					"mouse": "Your radios and Pip-Boy play the host's stations, in step with the host",
+					"vars": [
+						{
+							"configINI": "Settings:bSyncRadio",
+							"default": 1
+						}
+					]
+				},
+				"22": {
+					"title": "Desync Notices",
+					"type": 5,
+					"enable": 1,
+					"mouse": "A corner message when your game and another player's disagree for a while",
+					"vars": [
+						{
+							"configINI": "Settings:bDesyncNotices",
+							"default": 1
+						}
+					]
+				},
+				"23": {
+					"title": "Display",
+					"enable": 1,
+					"type": 0
+				},
+				"25": {
+					"title": "Friend Markers",
+					"type": 5,
+					"enable": 1,
+					"mouse": "A chevron and the name over each friend, so you can find them",
+					"vars": [
+						{
+							"configINI": "Settings:bFriendMarkers",
+							"default": 1
+						}
+					]
+				},
+				"24": {
+					"title": "Field of View",
+					"type": 2,
+					"enable": 1,
+					"mouse": "How wide you see the world (0: the game's own, 75). Your hands and weapon stay as they are",
+					"vars": [
+						{
+							"configINI": "Settings:iFieldOfView",
+							"default": 0
+						}
+					],
+					"scale": {
+						"valueDecimal": 0,
+						"valueIncrement": 5,
+						"valueMin": 0,
+						"valueMax": 120
+					}
+				}
+			}
+		}
+	}
+}

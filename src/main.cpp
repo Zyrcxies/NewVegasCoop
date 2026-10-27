@@ -1,0 +1,2741 @@
+// Entry point: xNVSE calls NVSEPlugin_Query, then NVSEPlugin_Load, when the game starts.
+
+#include "nvse/PluginAPI.h"
+
+#include "config.h"
+#include "coop/clock.h"
+#include "coop/coop.h"
+#include "coop/game_mode.h"
+#include "coop/frame_parts.h"
+#include "coop/threat.h"
+#include "coop/reinforcements.h"
+#include "coop/balance.h"
+#include "coop/steer.h"
+#include "speech.h"
+#include "display.h"
+#include "voice_out.h"
+#include "game/steam.h"
+#include "crash.h"
+#include "dll_blocker.h"
+#include "dev/commands.h"
+#include "dev/lab_channel.h"
+#include "dev/dump_game.h"
+#include "dev/second_copy.h"
+#include "game/addresses.h"
+#include "game/game.h"
+#include "game/escape_menu.h"
+#include "game/inspector.h"
+#include "game/mirror.h"
+#include "game/mover.h"
+#include "game/companions.h"
+#include "game/containers.h"
+#include "game/doors.h"
+#include "game/mines.h"
+#include "game/items.h"
+#include "game/progress.h"
+#include "game/dialogue.h"
+#include "game/sleepwait.h"
+#include "game/steam.h"
+#include "game/quests.h"
+#include "game/npcs.h"
+#include "game/standins.h"
+#include "log.h"
+#include "version.h"
+
+#include <algorithm>
+#include <shlobj.h>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <future>
+#include <map>
+#include <utility>
+#include <vector>
+
+namespace
+{
+    PluginHandle g_handle = kPluginHandle_Invalid;
+    coop::Coop g_coop;
+    Config g_config;
+    game::StandIns g_standIns;
+    Speech g_speech;  // chat lines read out loud
+    coop::SaveMode g_saveMode;  // this save's (REBALANCE.md), kept in it through xNVSE's co-save
+    VoiceOut g_voiceOut;  // others' voices
+    game::Npcs g_npcs;  // the host's NPCs: shared (host) or copied (friend)
+    game::Companions g_companions;  // host: who each companion follows (DESIGN: companions are the party's)
+    game::Doors g_doors;  // open, closed, locked: the host's (step 6.1)
+    game::Mines g_mines;  // disarmed or gone in anyone's game: in all (and only our own player sets ours off)
+    game::Containers g_containers;  // what containers and bodies hold: the host's (step 6.2)
+    game::WorldItems g_items;  // items lying in the world: the host's (step 6.3)
+    game::Quests g_quests;  // quest progress: the host's (step 7.1)
+    game::Progress g_progress;  // XP and karma shared, reputation the host's (step 7.2)
+    game::SleepWait g_sleepWait;  // sleep and wait: everyone agrees, everyone waits; the host's clock (step 8.2)
+    game::Dialogue g_dialogue;  // one conversation at a time; friends' lines run in the host's world (step 7.4)
+    game::Inspector g_inspector;
+    game::Mirror g_mirror;
+    bool g_waitForHostLoad = false;  // friend, after a game over: frozen until the host's game loads a save (step 8.3)
+    void FollowHostSaves(uint32_t now);
+    void ServeFriendSaves();
+    bool g_reportLoad = false;  // friend: tell the host once the save it loaded is in (step 8.4)
+    bool g_loadWatch = false;  // lab (loadwatch, step 8.4): log frame gaps and the loading screen
+    bool g_worldLoaded = false;      // a save or new game is running (not the main menu or a loading screen)
+    bool g_waitingForIntro = false;  // co-op starts once the player is out of Doc Mitchell's
+    bool g_startSoon = false;  // a save or new game just loaded: try starting co-op in a moment
+    uint32_t g_nextIntroCheck = 0;
+    coop::Pose g_travel;  // where the group went, once we're out of any menu (DESIGN: doors pull everyone)
+    // Companions following us when we followed the group (DESIGN: companions are the party's): the game only brings
+    // them through a door our player uses, so they're brought over once we've arrived.
+    std::vector<uint32_t> g_bringFollowers;
+    uint32_t g_bringUntil = 0;
+    uint8_t g_travelLeader = 0;
+    bool g_hasTravel = false;
+    uint32_t g_travelAt = 0;     // when we go (after a countdown, like Borderlands)
+    int g_countdownLeft = 0;     // seconds of the countdown still to show
+    constexpr int kFollowSeconds = 4;
+    // Lab channel (developer-only, NVCoop.ini LabChannel=1): tools on this PC run lines in the game.
+    dev::LabChannel g_lab;
+    bool g_loadingSave = false;  // between "loading a save" and "save loaded": lab lines wait
+
+    // Characters we made that the save knows about (game::NoteMadeCharacters), sorted, and when to check again.
+    std::vector<uint32_t> g_notedMade;
+    uint32_t g_nextMadeCheck = 0;
+    // Hits and explosions further off than this aren't ours to count (game units: 12288, ~175 m, at the game's
+    // default uGridsToLoad; half as far again as the loaded cells reach, which grows with it).
+    float MaxHitDistance() { return game::LoadedReach() * 1.5f; }
+
+    // Host: enemies a player hurt go for the biggest threat among the players (coop::ThreatTable), held there with
+    // game::ForceTarget; g_forced says which player each is held to.
+    coop::ThreatTable g_threats;
+    bool g_fovAfterLoad = false;  // the field of view to be set again (a save was loaded)
+
+    struct HeldTo { uint8_t player; TESObjectREFR* target; };  // (the character itself: the game keeps a pointer)
+    std::map<uint32_t, HeldTo> g_forced;
+    uint32_t g_nextThreatLook = 0;
+    // Co-op balanced, where this game holds the world (host or alone): bodies of generic enemies looked at already.
+    std::set<uint32_t> g_bodiesThinned;
+    uint32_t g_nextThinLook = 0;
+    // Host, Co-op balanced: extra enemies for bigger groups (UpdateReinforcements).
+    coop::Reinforcements g_reinforcements;
+    std::set<uint32_t> g_fightersSeen;   // enemies already counted (and our extras)
+    std::vector<uint32_t> g_extras;      // extras we made
+    uint32_t g_nextReinforceLook = 0;
+
+    // Combat numbers for the log, every 10 s while there's fighting (DESIGN: measure).
+    struct Tally { int count = 0; float damage = 0; void Add(float d) { ++count; damage += d; } };
+    struct CombatTally
+    {
+        Tally sent;      // friend: our hits sent to the host
+        Tally applied;   // host: friends' hits applied
+        int ignored = 0; // host: friends' hits that failed the checks
+        Tally hurt;      // host: hits on friends' characters passed on to them
+        Tally taken;     // friend: health the host says we lost
+        Tally undone;    // friend: hits on us by our own copies of the world, undone (the host sends the real ones)
+    } g_tally;
+    uint32_t g_nextTallyAt = 0;
+
+    void LogCombat(uint32_t now)
+    {
+        if (!coop::IsDue(now, g_nextTallyAt))
+            return;
+        g_nextTallyAt = now + 10000;
+        const CombatTally& t = g_tally;
+        if (t.sent.count || t.applied.count || t.ignored || t.hurt.count || t.taken.count || t.undone.count)
+        {
+            TESObjectREFR* player = game::Player();
+            LOG_INFO("Combat: sent %d hits (%.0f damage); applied %d friend hits (%.0f), ignored %d; passed on %d "
+                "hits to friends (%.0f); took %d times (%.0f) from the host; undid %d hits (%.0f) from our copies; "
+                "our health %.0f / %.0f", t.sent.count, t.sent.damage, t.applied.count, t.applied.damage, t.ignored,
+                t.hurt.count, t.hurt.damage, t.taken.count, t.taken.damage, t.undone.count, t.undone.damage,
+                game::Health(player), game::MaxHealth(player));
+        }
+        g_tally = {};
+    }
+
+    // Folder holding NVCoop.dll (Data\NVSE\Plugins\), with a trailing slash.
+    std::string PluginFolder()
+    {
+        char path[MAX_PATH];
+        HMODULE self = nullptr;
+        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCSTR>(&PluginFolder), &self);
+        GetModuleFileNameA(self, path, MAX_PATH);
+        std::string folder(path);
+        return folder.substr(0, folder.find_last_of("\\/") + 1);
+    }
+
+    // DESIGN: no pausing, ever, in co-op. Real Time Menus (a required plugin) does it; the menus it can leave
+    // paused must all be set to run (step 7.3: its conversation handling is what our own attempt lacked).
+    std::string g_pausingMenus;  // the ones its settings leave paused ("" none)
+
+    void CheckRealTimeMenus()
+    {
+        const std::string ini = PluginFolder() + "RealTimeMenus.ini";
+        const char* kIni = ini.c_str();
+        const char* kKeys[] = {"bPauseContainers", "bPauseBarter", "bPauseServiceRepair", "bPauseRecipeMenu",
+            "bPauseLockPickMenu", "bPauseComputerMenu", "bPauseCompanionWheel", "bPausePipBoy", "bPauseDialogue",
+            "bPauseVATS"};
+        g_pausingMenus.clear();
+        for (const char* key : kKeys)
+        {
+            char value[16] = {};
+            GetPrivateProfileStringA("Menus", key, "0", value, sizeof(value), kIni);
+            if (value[0] != '0')
+                g_pausingMenus += std::string(g_pausingMenus.empty() ? "" : ", ") + key;
+        }
+        if (!g_pausingMenus.empty())
+            LOG_WARN("Real Time Menus pauses menus co-op needs running (%s): set them to 0 in %s",
+                g_pausingMenus.c_str(), kIni);
+    }
+
+    std::future<coop::ModList> g_modScan;  // our mod files, being read (step 8.6)
+    constexpr int kModQuestion = 3;        // our AskYesNo id: fetch the host's mods?
+    bool g_modAsked = false;
+
+    // Where mod files are and go (step 8.6): all in the game's own folders, but plugins.txt (the game's own list).
+    coop::ModFolders ModFoldersNow()
+    {
+        char path[MAX_PATH];
+        GetModuleFileNameA(nullptr, path, MAX_PATH);
+        std::string game(path);
+        game = game.substr(0, game.find_last_of("\\/") + 1);
+        SYSTEMTIME t;
+        GetLocalTime(&t);
+        char stamp[32];
+        std::snprintf(stamp, sizeof(stamp), "%04u-%02u-%02u %02u%02u%02u", t.wYear, t.wMonth, t.wDay, t.wHour,
+            t.wMinute, t.wSecond);
+        char* local = nullptr;
+        size_t length = 0;
+        std::string pluginsTxt;
+        if (_dupenv_s(&local, &length, "LOCALAPPDATA") == 0 && local)
+            pluginsTxt = std::string(local) + "\\FalloutNV\\plugins.txt";
+        free(local);
+        return {game + "Data\\", game + "NVCoop Downloads\\", game + "NVCoop Backup\\" + stamp + "\\", pluginsTxt};
+    }
+
+    // Friend, at the main menu (step 8.6): our mods are compared with the host's before any save is loaded (a save
+    // loaded without its mods loses their part of it once saved again). Joining is still loading a save.
+    // Linked saves (step 8.3, DESIGN rule 3). Friend: the host saved, so we save (when we can: not mid-load), or
+    // the host is loading, so we load our matching save.
+    std::string g_pendingLinkedSave;       // to save once the world is loaded
+    // Our linked save, made: checked till its file is written (Dead Money playthrough, 2026-10-16: saved during a
+    // fight, the game didn't, and loading the host's save then found none of ours), tried again every few seconds.
+    std::string g_checkingSave;
+    uint64_t g_saveAskedAt = 0;  // file time when we asked
+    uint32_t g_nextSaveCheck = 0, g_saveGiveUpAt = 0, g_saveTries = 0;
+
+    uint64_t FileTimeNow()
+    {
+        FILETIME t;
+        GetSystemTimeAsFileTime(&t);
+        return (uint64_t(t.dwHighDateTime) << 32) | t.dwLowDateTime;
+    }
+
+    std::string SavesFolder();
+
+    bool SavedSince(const std::string& save, uint64_t since)
+    {
+        WIN32_FILE_ATTRIBUTE_DATA a;
+        if (!GetFileAttributesExA((SavesFolder() + save + ".fos").c_str(), GetFileExInfoStandard, &a))
+            return false;
+        uint64_t written = (uint64_t(a.ftLastWriteTime.dwHighDateTime) << 32) | a.ftLastWriteTime.dwLowDateTime;
+        return written + 20000000ull >= since;  // (2 s of slack for the file system's clock)
+    }
+    std::string g_expectedLoad;            // the matching save we asked the game to load
+    uint32_t g_expectLoadUntil = 0;
+    // Our own saves -> the host's save made for them, by host (kept in NVCoopLinkedSaves.txt beside the plugin, so
+    // F5 then F9 after a restart still asks the host).
+    std::map<std::string, std::string> g_ownSaves;  // "<host>\t<our save>" -> the host's save
+    void SaveOwnSaves();
+
+    // Whose game Join Co-op joins (step 8.5): a Steam friend hosting, or (labs: LanCoop=1, or Mode=join) an address.
+    struct JoinTarget
+    {
+        net::SteamId steam = 0;
+        std::string address;
+        std::string label;  // for the screen
+    };
+    JoinTarget g_joinTarget;
+
+    // Our name in co-op: NVCoop.ini's Name, or our Steam name if that's left at its default.
+    std::string MyName()
+    {
+        if (g_config.name == "Player" && game::SteamReady() && !game::SteamName().empty())
+            return game::SteamName();
+        return g_config.name;
+    }
+
+    // Connects to g_joinTarget (to join, or only to compare mods).
+    bool ConnectToHost(bool checkModsOnly)
+    {
+        if (g_joinTarget.steam)
+        {
+            if (!game::SteamReady())
+                return false;
+            auto steam = std::make_unique<net::SteamSession>(game::Steam());
+            if (!steam->StartClient(g_joinTarget.steam))
+                return false;
+            g_coop.JoinOn(std::move(steam), MyName(), checkModsOnly);
+            return true;
+        }
+        std::string address = g_joinTarget.address.empty() ? g_config.address : g_joinTarget.address;
+        return g_coop.Join(address, g_config.port, MyName(), checkModsOnly);
+    }
+
+    enum class MenuCheck { NotYet, Scanning, Comparing, Done } g_menuCheck = MenuCheck::NotYet;
+    std::future<coop::ModList> g_menuScan;
+    coop::ModList g_menuMods;
+    std::vector<std::string> g_menuPlugins;  // the load order g_menuMods was read for
+    uint32_t g_nextMenuCheck = 0;
+    bool g_menuMatched = false;  // so joining doesn't show the same xNVSE plugin warning again
+
+    void LoadOurMatch();
+    bool g_joinClicked = false;      // Join Co-op on the main menu (not the settings file's Mode=join)
+    bool g_toldUnreachable = false;
+
+    void CheckModsAtMenu(uint32_t now)
+    {
+        if (g_config.mode != Config::Mode::Join || g_worldLoaded || g_loadingSave || g_menuCheck == MenuCheck::Done ||
+            !coop::IsDue(now, g_nextMenuCheck))
+            return;
+        switch (g_menuCheck)
+        {
+        case MenuCheck::NotYet:
+            if (g_menuMods.empty())
+            {
+                std::vector<std::string> plugins = game::LoadedMods();
+                if (plugins.empty())
+                    return;
+                std::string list;
+                for (size_t i = 0; i < plugins.size(); ++i)
+                    list += (i ? ", " : "") + plugins[i];
+                LOG_INFO("Load order from the game's list (%zu): %s", plugins.size(), list.c_str());
+                g_menuPlugins = plugins;
+                std::string folder = PluginFolder();
+                g_menuScan = std::async(std::launch::async, [plugins = std::move(plugins), folder,
+                    data = ModFoldersNow().data]
+                    { return coop::ScanMods(data, plugins, folder + "NVCoopModHashes.txt", "NVCoop.dll"); });
+                g_menuCheck = MenuCheck::Scanning;
+                return;
+            }
+            g_coop.SetMods(g_menuMods);
+            g_coop.SetModFolders(ModFoldersNow());
+            if (!ConnectToHost(true))
+            {
+                LOG_ERROR("Couldn't start comparing mods with %s", g_joinTarget.label.c_str());
+                g_menuCheck = MenuCheck::Done;
+                return;
+            }
+            g_menuCheck = MenuCheck::Comparing;
+            return;
+        case MenuCheck::Scanning:
+            if (g_menuScan.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+                return;
+            g_menuMods = g_menuScan.get();
+            g_menuCheck = MenuCheck::NotYet;
+            return;
+        case MenuCheck::Comparing:
+            if (g_coop.ModsMatched())
+            {
+                g_menuCheck = MenuCheck::Done;
+                g_menuMatched = true;
+                if (g_joinClicked)
+                    LoadOurMatch();
+                else
+                    game::Notify("Co-op: your mods match the host's. Load a save to join.", 5);
+                return;
+            }
+            if (g_coop.GetFriendState() == coop::FriendState::Rejected)
+            {
+                g_coop.Stop();  // (why: on screen, as for any refusal)
+                g_menuCheck = MenuCheck::Done;
+                return;
+            }
+            if (g_coop.GetRole() != coop::Role::None && g_coop.GetFriendState() != coop::FriendState::Disconnected)
+                return;  // still comparing, or asking about or fixing our mods
+            // The host wasn't reached (not hosting yet?): again later. Loading a save compares too.
+            g_coop.Stop();
+            if (g_joinClicked && !g_toldUnreachable)
+            {
+                g_toldUnreachable = true;
+                game::ShowMessage("Couldn't reach " + (g_joinTarget.label.empty() ? g_config.address : g_joinTarget.label) +
+                    " yet. Trying again every 15 seconds: they need to be in a game with Host Co-op.");
+            }
+            LOG_INFO("Mods: comparing again in 15 s from the main menu");
+            g_nextMenuCheck = now + 15000;
+            g_menuCheck = MenuCheck::NotYet;
+            return;
+        case MenuCheck::Done:
+            return;
+        }
+    }
+
+    // Main menu buttons (step 8.6). Host: the save loaded next hosts. Join: compare mods with the host (fixing them
+    // if they differ), then load our match of the save the host is playing; with none, the player picks one.
+    bool g_openLoadMenu = false;  // next frame (not from inside the click on our option)
+    bool g_warnNoLargeAddress = false;  // once, at the main menu
+    bool HaveSaves();
+
+    void HostClicked()
+    {
+        if (g_coop.GetRole() != coop::Role::None && !g_coop.InGame())
+            g_coop.Stop();  // (comparing from the main menu)
+        g_config.mode = Config::Mode::Host;
+        g_menuCheck = MenuCheck::Done;
+        g_joinClicked = false;
+        LOG_INFO("Main menu: Host Co-op");
+        if (HaveSaves())
+            g_openLoadMenu = true;  // the save to host
+        else
+            game::ShowMessage("You're hosting co-op: start a new game. Friends can join once you're out of Doc "
+                "Mitchell's house.");
+    }
+
+    // Join Co-op: first, whose game. (For now the host in NVCoop.ini; Steam friends hosting come with step 8.5.)
+    constexpr int kJoinWhoQuestion = 5;  // our AskChoice id
+    bool g_askedWhoToJoin = false;
+    std::vector<JoinTarget> g_joinChoices;  // the buttons of "Join whose game?" (Cancel after them)
+
+    void JoinClicked()
+    {
+        LOG_INFO("Main menu: Join Co-op");
+        g_joinChoices.clear();
+        for (const game::SteamFriend& f : game::HostingFriends())
+            if (g_joinChoices.size() < 8)
+                g_joinChoices.push_back({f.id, "", f.mode.empty() ? f.name : f.name + " (" + f.mode + ")"});
+        if (g_config.lanCoop)
+            g_joinChoices.push_back({0, g_config.address, g_config.address + " (LanCoop)"});
+        if (g_joinChoices.empty())
+        {
+            game::ShowMessage(game::SteamReady() ? "None of your Steam friends are hosting co-op right now. (They "
+                "need to be in a game, with Host Co-op.)" : "Joining needs Steam running and logged in.");
+            return;
+        }
+        std::vector<std::string> buttons;
+        for (const JoinTarget& t : g_joinChoices)
+            buttons.push_back(t.label);
+        buttons.push_back("Cancel");
+        g_askedWhoToJoin = game::AskChoice("Join whose game?", buttons, kJoinWhoQuestion);
+    }
+
+    void JoinHost(const JoinTarget& target)
+    {
+        if (g_coop.GetRole() != coop::Role::None && !g_coop.InGame() && !g_coop.DownloadingMods())
+            g_coop.Stop();
+        g_config.mode = Config::Mode::Join;
+        g_joinTarget = target;
+        g_menuCheck = MenuCheck::NotYet;
+        g_nextMenuCheck = 0;
+        g_joinClicked = true;
+        g_toldUnreachable = false;
+        LOG_INFO("Main menu: joining %s", target.label.c_str());
+        game::Notify(("Co-op: connecting to " + target.label + "...").c_str(), 3);
+    }
+
+    void MainMenuClicks()
+    {
+        if (g_warnNoLargeAddress && !g_worldLoaded && game::MainMenuMade() && !game::QuestionOpen())
+        {
+            g_warnNoLargeAddress = false;
+            game::ShowMessage("New Vegas is running without the 4GB patch, so it can run out of memory and crash "
+                "(most often when alt-tabbing). Install the \"FNV 4GB Patcher\" (Nexus Mods), then start the game "
+                "as before.");
+        }
+        if (g_openLoadMenu && !g_worldLoaded && !g_loadingSave)
+        {
+            g_openLoadMenu = false;
+            game::OpenLoadMenu();
+        }
+        int choice = g_askedWhoToJoin ? game::TakeChoice(kJoinWhoQuestion) : -1;
+        if (choice < 0)
+            return;
+        g_askedWhoToJoin = false;
+        if (choice < static_cast<int>(g_joinChoices.size()))
+            JoinHost(g_joinChoices[choice]);
+    }
+
+    std::string SavesFolder()
+    {
+        char documents[MAX_PATH];
+        if (FAILED(SHGetFolderPathA(nullptr, CSIDL_PERSONAL, nullptr, 0, documents)))
+            return "";
+        return std::string(documents) + "\\My Games\\FalloutNV\\Saves\\";
+    }
+
+    // After Join, mods matching: our save that goes with the host's ("" if none).
+    std::string OurMatchOf(const std::string& host, const std::string& hostSave)
+    {
+        if (hostSave.empty())
+            return "";
+        std::string folder = SavesFolder();
+        auto exists = [&](const std::string& save)
+        {
+            DWORD a = GetFileAttributesA((folder + save + ".fos").c_str());
+            return !save.empty() && a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
+        };
+        // Our own save the host saved for (the host's is then "Co-op <us> <when>"), or our match of theirs.
+        std::string prefix = coop::PlainName(host, "Host") + "\t";
+        for (const auto& [key, theirs] : g_ownSaves)
+            if (key.compare(0, prefix.size(), prefix) == 0 && theirs == hostSave && exists(key.substr(prefix.size())))
+                return key.substr(prefix.size());
+        std::string linked = coop::LinkedSaveName(host, hostSave);
+        return exists(linked) ? linked : "";
+    }
+
+    bool HaveSaves()
+    {
+        WIN32_FIND_DATAA found;
+        HANDLE h = FindFirstFileA((SavesFolder() + "*.fos").c_str(), &found);
+        if (h == INVALID_HANDLE_VALUE)
+            return false;
+        FindClose(h);
+        return true;
+    }
+
+    void LoadOurMatch()
+    {
+        const net::ModsMatch& host = g_coop.MatchedHost();
+        std::string ours = OurMatchOf(host.hostName, host.save);
+        if (ours.empty())
+        {
+            LOG_INFO("Main menu: no save of ours goes with %s's \"%s\"; the player picks one", host.hostName.c_str(),
+                host.save.c_str());
+            if (HaveSaves())
+            {
+                g_openLoadMenu = true;
+                game::Notify(("Co-op: pick the character to bring into " + host.hostName + "'s game").c_str(), 8);
+            }
+            else
+                game::ShowMessage("No saves yet: start a new game. You'll join " + host.hostName + "'s game once "
+                    "you're out of Doc Mitchell's house.");
+            return;
+        }
+        LOG_INFO("Main menu: loading \"%s\", our match of %s's \"%s\"", ours.c_str(), host.hostName.c_str(),
+            host.save.c_str());
+        g_expectedLoad = ours;
+        game::RunConsoleLine(("load \"" + ours + "\"").c_str());
+    }
+
+    // Host: who asks to join is let in only if we say so (step 8.5), one question at a time.
+    constexpr int kJoinQuestion = 4;  // our AskYesNo id
+    std::vector<coop::JoinAsk> g_joinAsks;
+    uint32_t g_openJoinAsk = 0;  // the one on screen (0: none)
+
+    void AnswerJoinAsk(bool yes)
+    {
+        g_coop.AnswerJoin(g_openJoinAsk, yes);
+        g_openJoinAsk = 0;
+    }
+
+    void AskAboutJoins()
+    {
+        for (coop::JoinAsk& ask : g_coop.TakeJoinAsks())
+            g_joinAsks.push_back(std::move(ask));
+        if (g_openJoinAsk)
+        {
+            int answer = game::TakeAnswer(kJoinQuestion);
+            if (answer >= 0)
+                AnswerJoinAsk(answer == 1);
+        }
+        // (Not over another of our questions: it would replace it.)
+        if (g_openJoinAsk || g_joinAsks.empty() || game::QuestionOpen())
+            return;
+        coop::JoinAsk ask = g_joinAsks.front();
+        g_joinAsks.erase(g_joinAsks.begin());
+        if (!g_coop.StillAsking(ask.id))
+            return;  // they left meanwhile
+        std::string text = ask.name + (ask.wantsFiles ? " wants to join, and needs some of your mod files first. Send "
+            "them and let " + ask.name + " in?" : " wants to join. Let them in?");
+        if (game::AskYesNo(text, kJoinQuestion))
+            g_openJoinAsk = ask.id;
+        else
+            g_coop.AnswerJoin(ask.id, false);
+    }
+
+    constexpr int kQuitQuestion = 6;  // our AskChoice id: quit now to load the mods just fetched?
+    bool g_askedToQuit = false;
+    bool g_quitSoon = false;  // next frame (not from inside the message box's close)
+
+    // The download's box (step 8.6): live progress and Cancel, then "OK" to how it ended. (The main menu has no
+    // corner messages; the box keeps the width it opened with, so it opens with the widest numbers.)
+    constexpr int kProgressQuestion = 7;  // our AskChoice id
+
+    // Friend: talking to one of the group's companions opens our menu instead (DESIGN: companions are the party's;
+    // Alex, October 2026: anyone can say "follow me").
+    constexpr int kCompanionQuestion = 8;  // our AskChoice id
+    uint32_t g_companionAsked = 0;         // the host's id for the companion asked about (0: none)
+
+    void AskAboutCompanion(uint32_t now)
+    {
+        if (uint32_t ref = g_dialogue.TakeCompanionAsk(); ref && !g_companionAsked)
+        {
+            uint8_t leader = 0;
+            TESObjectREFR* ours = g_npcs.OurRefOf(ref);
+            if (g_coop.CompanionLeader(ref, leader))
+            {
+                std::string name = ours && *game::Name(ours) ? game::Name(ours) : "Companion";
+                std::string doing = leader == net::kCompanionWaiting ? "waiting" : leader == g_coop.MyPlayerId() ?
+                    "following you" : "following " + g_coop.NameOf(leader);
+                if (game::AskChoice(name + " (" + doing + ")", {"Follow me", "Wait here", "Talk", "Cancel"},
+                    kCompanionQuestion))
+                    g_companionAsked = ref;
+            }
+        }
+        if (!g_companionAsked)
+            return;
+        int choice = game::TakeChoice(kCompanionQuestion);
+        if (choice == -1)
+            return;
+        uint32_t ref = g_companionAsked;
+        g_companionAsked = 0;
+        if (choice == 0)
+            g_coop.OrderCompanion(ref, net::CompanionOrderKind::FollowMe);
+        else if (choice == 1)
+            g_coop.OrderCompanion(ref, net::CompanionOrderKind::Wait);
+        else if (choice == 2)
+        {
+            g_dialogue.AllowTalk(ref, now + 15000);
+            if (TESObjectREFR* ours = g_npcs.OurRefOf(ref))
+                game::Activate(ours);  // (the conversation, this time let through)
+        }
+    }
+    bool g_progressShown = false;
+    std::string g_progressText;  // what it says now (only that box is changed: another may be on screen)
+    uint32_t g_nextProgress = 0;
+    std::string g_pendingResult;  // how fixing ended, for when the download's box is closed
+
+    std::string ProgressText(bool widest, bool done)
+    {
+        const coop::ModDownload& d = g_coop.Download();
+        uint64_t total = d.BytesTotal(), got = widest || done ? total : d.BytesDone();
+        size_t files = d.FilesTotal(), file = widest || done ? files : d.Finished().size() + 1;
+        if (file > files)
+            file = files;
+        char text[160];
+        std::snprintf(text, sizeof(text), "%s the host's mods\n%.1f of %.1f MB (%u%%), file %zu of %zu",
+            done ? "Got" : "Getting", got / 1048576.0, total / 1048576.0,
+            total ? static_cast<unsigned>(got * 100 / total) : 100u, file, files);
+        return text;
+    }
+
+    void StartedFixing()
+    {
+        if (!g_coop.DownloadingMods() || g_coop.Download().FilesTotal() == 0)
+            return;
+        g_progressText = ProgressText(true, false);
+        g_progressShown = game::AskChoice(g_progressText, {"Cancel"}, kProgressQuestion);
+        g_nextProgress = 0;
+    }
+
+    void ShowFixResult(const std::string& result)
+    {
+        // Fixed: the restart can be right away (playthrough test, 2026-10-16: the friend's main menu seemed stuck
+        // after a plain OK).
+        if (result.find("Restart the game") != std::string::npos)
+            g_askedToQuit = game::AskChoice(result, {"Quit the game", "Later"}, kQuitQuestion);
+        else
+            game::ShowMessage(result);
+    }
+
+    // Friend whose mods aren't the host's (step 8.6): the question, the download's progress, how it ended.
+    void FixMods(uint32_t now)
+    {
+        std::string question = g_coop.TakeModQuestion();
+        if (!question.empty())
+            g_modAsked = game::AskYesNo(question, kModQuestion);
+        if (g_quitSoon)
+        {
+            g_quitSoon = false;
+            LOG_INFO("Quitting, to load the mods just fetched");
+            game::QuitGame();
+        }
+        int quit = g_askedToQuit ? game::TakeChoice(kQuitQuestion) : -1;
+        if (quit >= 0)
+        {
+            g_askedToQuit = false;
+            g_quitSoon = quit == 0;
+        }
+        int answer = g_modAsked ? game::TakeAnswer(kModQuestion) : -1;
+        if (answer >= 0)
+        {
+            g_modAsked = false;
+            g_coop.AnswerModFix(answer == 1);
+            StartedFixing();
+        }
+        if (g_progressShown)
+        {
+            int clicked = game::TakeChoice(kProgressQuestion);
+            if (clicked == game::kNeverShown)
+            {
+                g_progressShown = false;  // (then how it ends is shown in a box of its own)
+                if (!g_pendingResult.empty())
+                    ShowFixResult(std::exchange(g_pendingResult, std::string()));
+            }
+            else if (clicked >= 0)
+            {
+                g_progressShown = false;
+                if (g_coop.DownloadingMods())
+                {
+                    LOG_INFO("Mods: the download was cancelled");
+                    g_coop.CancelModFix();
+                }
+                else if (!g_pendingResult.empty())
+                    ShowFixResult(std::exchange(g_pendingResult, std::string()));
+            }
+            else if (!g_pendingResult.empty() && game::MessageShows(g_progressText))
+            {
+                g_progressText = g_pendingResult.find("Restart the game") != std::string::npos ?
+                    ProgressText(false, true) : "Couldn't get the host's mods";
+                game::SetMessageText(g_progressText);
+                game::SetMessageButton(0, "OK");
+            }
+            else if (g_coop.DownloadingMods() && coop::IsDue(now, g_nextProgress) &&
+                game::MessageShows(g_progressText))
+            {
+                g_nextProgress = now + 250;
+                g_progressText = ProgressText(false, false);
+                game::SetMessageText(g_progressText);
+            }
+        }
+        std::string result = g_coop.TakeModFixResult();
+        if (!result.empty())
+        {
+            if (g_progressShown && game::MessageShows(g_progressText))
+            {
+                // The download's box says so, and its button leads on to this.
+                g_pendingResult = result;
+                g_progressText = result.find("Restart the game") != std::string::npos ? ProgressText(false, true) :
+                    "Couldn't get the host's mods";
+                game::SetMessageText(g_progressText);
+                game::SetMessageButton(0, "OK");
+            }
+            else if (g_progressShown)
+            {
+                // Not on screen yet (another box is): ours says how it went when it comes up, then this.
+                g_pendingResult = result;
+            }
+            else
+            {
+                g_progressShown = false;
+                ShowFixResult(result);
+            }
+            if (g_menuCheck == MenuCheck::Comparing)
+                g_menuCheck = MenuCheck::Done;  // restart
+        }
+        if (answer == 0 && g_menuCheck == MenuCheck::Comparing)
+            g_menuCheck = MenuCheck::Done;  // they said no
+    }
+
+    void StartCoop()
+    {
+        if (!g_pausingMenus.empty())
+            game::Notify("Co-op: Real Time Menus still pauses some menus (see NVCoop.log)");
+        // Step 8.1, VATS in real time: Real Time Menus slows time while aiming (its fVATSTimeMult, 0.02), but each
+        // game's speed is its own, so a slowed game would fall behind the others. Co-op keeps it at full speed.
+        game::RunConsoleLine("SetGameSetting fVATSTimeMult 1");
+        LOG_INFO("VATS time while aiming: %s (1 = full speed)", game::Evaluate("GetGameSetting fVATSTimeMult").c_str());
+        // And no slow motion on a VATS kill: the game's own speed changes in VATS playback are skipped.
+        LOG_INFO("VATS: %d of its speed changes skipped (5 expected)", game::KeepVatsAtFullSpeed());
+        std::vector<std::string> plugins = game::LoadOrder();
+        std::string list;
+        for (size_t i = 0; i < plugins.size(); ++i)
+            list += (i ? ", " : "") + plugins[i];
+        LOG_INFO("Load order (%zu): %s", plugins.size(), list.c_str());
+        LOG_INFO("Load order from the game's list %s the script's", game::LoadedMods() == plugins ? "matches" : "DIFFERS from");
+        // Our mod files (step 8.6), read off the game thread: the first time, every mod file is read once. (The
+        // main menu's look, when there was one: the game loaded the same plugins.)
+        std::string folder = PluginFolder();
+        coop::ModFolders modFolders = ModFoldersNow();
+        g_coop.SetModFolders(modFolders);
+        if (!g_menuMods.empty() && plugins == g_menuPlugins)
+            g_modScan = std::async(std::launch::async, [mods = g_menuMods] { return mods; });
+        else
+            g_modScan = std::async(std::launch::async, [plugins = std::move(plugins), folder, data = modFolders.data]
+                { return coop::ScanMods(data, plugins, folder + "NVCoopModHashes.txt", "NVCoop.dll"); });
+    }
+
+    // Once our mod files are known: host or join.
+    void ConnectCoop()
+    {
+        coop::ModList mods = g_modScan.get();
+        size_t hashed = 0;
+        for (const net::ModFile& f : mods)
+            hashed += f.hashed;
+        LOG_INFO("Mods: %zu files (%zu fingerprinted; the base game's by size)", mods.size(), hashed);
+        g_coop.SetMods(std::move(mods));
+        g_coop.SetQuestMods(g_config.hostQuestMods);  // (a friend's come from the host)
+        g_coop.SetAutoApprove(g_config.autoApproveJoins);
+        const Config& config = g_config;
+        switch (config.mode)
+        {
+        case Config::Mode::Off:
+            LOG_INFO("Co-op is off (NVCoop.ini)");
+            break;
+        case Config::Mode::Menu:
+            break;  // (not reached: the main menu's buttons pick Host or Join)
+        case Config::Mode::Host:
+        {
+            // Through Steam (friends only, no open ports); the IP connection too only when asked (labs).
+            std::unique_ptr<net::SteamSession> steam;
+            if (game::SteamReady())
+            {
+                steam = std::make_unique<net::SteamSession>(game::Steam());
+                steam->StartHost(coop::kMaxFriends + 2);
+            }
+            if (steam && !config.lanCoop)
+                g_coop.HostOn(std::move(steam), MyName());
+            else if (steam)
+            {
+                if (!g_coop.HostBoth(config.port, std::move(steam), MyName()))
+                {
+                    LOG_WARN("Port %u is taken: hosting through Steam only", config.port);
+                    steam = std::make_unique<net::SteamSession>(game::Steam());
+                    steam->StartHost(coop::kMaxFriends + 2);
+                    g_coop.HostOn(std::move(steam), MyName());
+                }
+            }
+            else if (!config.lanCoop || !g_coop.Host(config.port, MyName()))
+            {
+                LOG_ERROR("Couldn't host: %s", config.lanCoop ? "the port is taken" :
+                    "Steam isn't running or logged in (LanCoop=1 hosts on the IP connection instead)");
+                game::Notify("Co-op: couldn't host (see NVCoop.log)", 8);
+            }
+            break;
+        }
+        case Config::Mode::Join:
+            if (!ConnectToHost(false))
+                LOG_ERROR("Couldn't start joining %s", g_joinTarget.label.c_str());
+            break;
+        case Config::Mode::Auto:
+            // Testing on one PC: the first game hosts, the second finds the port taken and joins.
+            if (!g_coop.Host(config.port, config.name))
+            {
+                LOG_INFO("Port %u is taken, so joining that game instead", config.port);
+                if (!g_coop.Join("127.0.0.1", config.port, config.name + " 2"))
+                    LOG_ERROR("Couldn't start joining");
+            }
+            break;
+        }
+    }
+
+    // Co-op only runs once the character is made and out of Doc Mitchell's house (DESIGN.md).
+    void TryStartCoop()
+    {
+        if (g_coop.GetRole() != coop::Role::None || g_modScan.valid() || g_config.mode == Config::Mode::Off ||
+            g_config.mode == Config::Mode::Menu)
+        {
+            g_waitingForIntro = false;
+            return;
+        }
+        if (!game::IsPastIntro())
+        {
+            if (!g_waitingForIntro)
+            {
+                LOG_INFO("Co-op waits until the character is made and out of Doc Mitchell's house");
+                game::Notify("Co-op starts once you've left Doc Mitchell's house");
+            }
+            g_waitingForIntro = true;
+            return;
+        }
+        g_waitingForIntro = false;
+        StartCoop();
+    }
+
+    void OnWorldLoaded()
+    {
+        g_fovAfterLoad = true;  // (a load can put the game's back)
+        // (A load forgets who enemies were held to: JIP clears its list.)
+        g_forced.clear();
+        g_threats.Clear();
+        g_fightersSeen.clear();
+        g_bodiesThinned.clear();
+        g_extras.clear();
+        g_reinforcements.Reset();
+        static int s_loggedGrid = 0;
+        if (int grid = game::LoadedGrid(); grid != s_loggedGrid)
+        {
+            s_loggedGrid = grid;
+            int buffer = game::ExteriorCellBuffer(), needed = (grid + 1) * (grid + 1);
+            LOG_INFO("Range: the game loads %dx%d cells around the player (uGridsToLoad), so other players, NPCs, "
+                "doors and items show within %.0f units (%.0f m); uExterior Cell Buffer %d", grid, grid,
+                game::LoadedReach(), game::LoadedReach() * 0.01428f, buffer);
+            if (buffer >= 0 && buffer < needed)
+            {
+                LOG_WARN("Range: uExterior Cell Buffer is %d; with uGridsToLoad %d it should be at least %d (in "
+                    "Fallout.ini and FalloutPrefs.ini), or the game can crash", buffer, grid, needed);
+                game::Notify(("Co-op: uGridsToLoad is " + std::to_string(grid) + " but uExterior Cell Buffer only " +
+                    std::to_string(buffer) + "; set it to " + std::to_string(needed) + " or the game can crash").c_str(),
+                    15);
+            }
+        }
+        if (g_reportLoad)
+        {
+            g_reportLoad = false;
+            g_coop.LoadedHostSave();  // (step 8.4)
+        }
+        if (g_waitForHostLoad)
+        {
+            g_waitForHostLoad = false;  // the load we waited for (step 8.3)
+            game::SetPlayerControls(true);
+        }
+        CheckCrashReporter();
+        if (!game::CompileScripts())
+        {
+            game::Notify("NVCoop couldn't start, see NVCoop.log");
+            return;
+        }
+        game::CheckMoverMap();
+        // Characters we made, kept in the save: friends' (they may not be here now) and copies of the host's NPCs
+        // (made again from the host's world). Deleted.
+        std::vector<uint32_t> leftover = game::SavedMadeCharacters();
+        size_t removed = 0;
+        // (Only characters: an id noted in a save can belong to something else made this session, such as Johnny
+        // Guitar's camera overlay objects, which crashed it once removed: two-PC test 2026-10-15, with MCM
+        // installed.)
+        for (uint32_t id : leftover)
+        {
+            TESObjectREFR* ref = game::LookupRef(id);
+            if (ref && game::IsActor(ref) && ref != game::Player())
+            {
+                game::Remove(ref);
+                ++removed;
+            }
+            else if (ref)
+                LOG_INFO("Not removing %08X: noted in the save as ours, but now it's something else", id);
+        }
+        if (!leftover.empty())
+            LOG_INFO("Removed %zu co-op character(s) left in the save (friends', copies of the host's NPCs; %zu "
+                "listed)", removed, leftover.size());
+        game::NoteMadeCharacters({});
+        g_notedMade.clear();
+        g_worldLoaded = true;
+        // Not right away: loading a save sends "new game" too, a moment before the save is in.
+        g_startSoon = true;
+        g_nextIntroCheck = GetTickCount() + 1000;
+    }
+
+    // The group went through a door or fast travelled: after a countdown in the corner, we go too (not while a
+    // menu is open).
+    void FollowGroup(uint32_t now)
+    {
+        if (!g_bringFollowers.empty())
+        {
+            coop::Pose me;
+            if (game::GetPose(game::Player(), me) && me.space == g_travel.space)
+            {
+                for (uint32_t id : g_bringFollowers)
+                    if (TESObjectREFR* follower = game::LookupRef(id); follower && !game::IsDead(follower))
+                    {
+                        game::MoveOnto(follower, game::Player());
+                        LOG_INFO("Companions: brought %s (%08X) along", game::Name(follower), id);
+                    }
+                g_bringFollowers.clear();
+            }
+            else if (coop::IsDue(now, g_bringUntil))
+                g_bringFollowers.clear();
+        }
+        coop::Pose to;
+        uint8_t leader;
+        if (g_coop.TakeTravel(to, leader))
+        {
+            g_travel = to;
+            g_travelLeader = leader;
+            g_hasTravel = true;
+            g_travelAt = now + kFollowSeconds * 1000;
+            g_countdownLeft = kFollowSeconds;
+            LOG_INFO("%s went to place %08X; following in %d s", g_coop.NameOf(leader).c_str(), to.space,
+                kFollowSeconds);
+        }
+        if (!g_hasTravel)
+            return;
+        std::string name = g_coop.NameOf(g_travelLeader);
+        if (g_countdownLeft > 0 && coop::IsDue(now, g_travelAt - g_countdownLeft * 1000))
+        {
+            game::Notify(("Following " + name + " in " + std::to_string(g_countdownLeft)).c_str(), 0.9f);
+            --g_countdownLeft;
+        }
+        if (!coop::IsDue(now, g_travelAt) || game::InMenu())
+            return;
+        g_hasTravel = false;
+        if (!game::TravelTo(g_travel))
+        {
+            LOG_WARN("%s went to place %08X, which isn't a place in this game (mods differ?)", name.c_str(),
+                g_travel.space);
+            return;
+        }
+        LOG_INFO("Following %s to place %08X (%.0f, %.0f, %.0f)", name.c_str(), g_travel.space, g_travel.x,
+            g_travel.y, g_travel.z);
+        if (g_coop.GetRole() == coop::Role::Host)
+        {
+            g_bringFollowers = game::Followers();
+            g_bringUntil = now + 30000;
+        }
+    }
+
+    // Host: a friend hit someone. The message could say anything, so check it (CLAUDE.md security).
+    void ApplyFriendHit(const coop::HitReport& hit)
+    {
+        TESObjectREFR* by = g_standIns.Character(hit.playerId);
+        TESObjectREFR* target = game::LookupRef(hit.targetRef);
+        coop::Pose at, from;
+        bool ok = by && game::IsActor(target) && target != game::Player() && !g_standIns.IsStandIn(target) &&
+            game::GetPose(target, at) && game::GetPose(by, from) && at.space == from.space;
+        if (ok && game::IsTeammate(target))
+        {
+            LOG_DEBUG("Player %u hit our companion %08X: no friendly fire in the party", hit.playerId, hit.targetRef);
+            return;
+        }
+        float dx = at.x - from.x, dy = at.y - from.y, dz = at.z - from.z;
+        if (!ok || dx * dx + dy * dy + dz * dz > MaxHitDistance() * MaxHitDistance())
+        {
+            LOG_INFO("Ignored a hit from player %u on %08X", hit.playerId, hit.targetRef);
+            ++g_tally.ignored;
+            return;
+        }
+        g_tally.applied.Add(hit.damage);
+        LOG_DEBUG("Player %u hit %08X for %.1f", hit.playerId, hit.targetRef, hit.damage);
+        // (No kill XP here for a friend's kills: their own game gives it, as their copy dies of the same hit, and
+        // shares it; two-PC test, 2026-10-15: giving it here too counted Chet twice.)
+        game::ApplyHit(target, by, hit.damage);
+        g_threats.Hurt(hit.targetRef, hit.playerId, hit.damage, GetTickCount());
+    }
+
+    // Downed, revive and game over (DESIGN: downed, not dead). The host decides revives and game over.
+    constexpr float kReviveReach = 150;       // how close (game units) to stand to a downed friend's character
+    constexpr uint32_t kReviveHoldMs = 2000;  // hold the activate key this long to revive
+    bool g_downed = false;
+    uint32_t g_downedAt = 0, g_nextBleedNotice = 0;
+    bool g_gameOver = false;  // until the next load: let the player die
+    int g_reviving = -1;      // player id we're reviving, or -1
+    uint32_t g_reviveStart = 0, g_reviveAgainAt = 0;
+
+    // Our own downed mode: up at 1 health with controls off until revived. (The game's knock-out, from the
+    // player being essential, never ends by itself for the player, so we wake them straight out of it.)
+    void SetDowned(bool down, uint32_t now)
+    {
+        if (down == g_downed)
+            return;
+        g_downed = down;
+        g_downedAt = g_nextBleedNotice = now;
+        game::SetPlayerControls(!down);
+        LOG_INFO("%s", down ? "We're down" : "We're back up");
+    }
+
+    void UpdateDowned(uint32_t now, const coop::Pose& me, float health, float maxHealth, bool healthFresh)
+    {
+        TESObjectREFR* player = game::Player();
+        game::SetPlayerEssential(g_coop.InGame() && !g_gameOver);
+        if (g_waitForHostLoad && !g_coop.InGame())
+        {
+            g_waitForHostLoad = false;  // the host left: nobody will load for us
+            game::SetPlayerControls(true);
+        }
+        if (!g_coop.InGame() || g_gameOver || g_waitForHostLoad)
+        {
+            SetDowned(false, now);
+            return;
+        }
+
+        net::GameOver over;
+        if (g_coop.TakeGameOver(over))
+        {
+            std::string text = over.reason == net::GameOverReason::BledOut ?
+                g_coop.NameOf(over.playerId) + " bled out. Game over!" : over.reason == net::GameOverReason::Killed ?
+                g_coop.NameOf(over.playerId) + " was killed. Game over!" : "Everyone is down. Game over!";
+            LOG_INFO("%s", text.c_str());
+            SetDowned(false, now);
+            if (g_coop.GetRole() == coop::Role::Host)
+            {
+                game::Notify(text.c_str());
+                g_gameOver = true;
+                game::KillPlayer();  // the game loads the last save, and friends load their matching ones
+                return;
+            }
+            // A friend doesn't die (their game would load its own last save): they wait for the host's load.
+            game::Notify((text + " Waiting for " + g_coop.NameOf(0) + " to load a save.").c_str());
+            game::SetPlayerControls(false);
+            g_waitForHostLoad = true;
+            return;
+        }
+        if (g_coop.TakeRevived() && g_downed)
+        {
+            game::ChangeHealth(player, maxHealth * coop::kReviveHealth - game::Health(player));
+            SetDowned(false, now);
+            game::Notify("You've been revived!");
+            return;
+        }
+
+        if (game::IsKnockedOut(player))
+        {
+            LOG_INFO("Knocked out (life state %d, health %.1f), waking up", game::LifeState(player), game::Health(player));
+            game::WakeUp(player);
+            game::ChangeHealth(player, 1 - game::Health(player));
+            SetDowned(true, now);
+            return;
+        }
+        static uint32_t s_nextLifeLog = 0;
+        if (healthFresh && (health < maxHealth * 0.25f || g_downed) && coop::IsDue(now, s_nextLifeLog))
+        {
+            s_nextLifeLog = now + 1000;
+            LOG_DEBUG("Our health %.1f / %.1f, life state %d%s", game::Health(player), maxHealth,
+                game::LifeState(player), g_downed ? ", downed" : "");
+        }
+        if (g_downed)
+        {
+            if (coop::IsDue(now, g_nextBleedNotice))
+            {
+                g_nextBleedNotice = now + 10000;
+                uint32_t gone = now - g_downedAt;
+                uint32_t left = gone < coop::kBleedOutMs ? (coop::kBleedOutMs - gone + 999) / 1000 : 0;
+                std::string text = "You're down! " + std::to_string(left) + " s until you bleed out";
+                game::Notify(text.c_str());
+            }
+            return;  // can't revive anyone while down
+        }
+
+        // Reviving: hold the activate key next to a downed friend's character.
+        int target = -1;
+        std::string name;
+        for (auto& [id, remote] : g_coop.Remotes())
+        {
+            coop::Pose at;
+            if (!remote.Downed() || !game::GetPose(g_standIns.Character(id), at) || at.space != me.space)
+                continue;
+            float dx = at.x - me.x, dy = at.y - me.y, dz = at.z - me.z;
+            if (dx * dx + dy * dy + dz * dz <= kReviveReach * kReviveReach)
+            {
+                target = id;
+                name = remote.name;
+                break;
+            }
+        }
+        bool holding = target >= 0 && coop::IsDue(now, g_reviveAgainAt) &&
+            game::IsControlPressed(game::layout::kControlActivate);
+        if (!holding)
+        {
+            g_reviving = -1;
+            return;
+        }
+        if (g_reviving != target)
+        {
+            g_reviving = target;
+            g_reviveStart = now;
+            game::Notify(("Reviving " + name + "... keep holding").c_str());
+        }
+        else if (now - g_reviveStart >= kReviveHoldMs)
+        {
+            LOG_INFO("Reviving %s", name.c_str());
+            g_coop.Revive(static_cast<uint8_t>(target));
+            g_reviving = -1;
+            g_reviveAgainAt = now + 3000;  // their health takes a moment to come back
+        }
+    }
+
+    // A lab line (dev/lab_channel.h): "status", "eval <expression>", "note <text>" (a marker in this log), or
+    // anything else, run as if typed in the console. The answer is one line of text.
+    std::string LabStatus()
+    {
+        char out[400];
+        coop::Pose me;
+        TESObjectREFR* player = game::Player();
+        bool here = g_worldLoaded && game::GetPose(player, me);
+        const char* role = g_coop.GetRole() == coop::Role::Host ? "hosting" :
+            g_coop.GetRole() == coop::Role::Friend ? (g_coop.InGame() ? "joined" : "joining") : "off";
+        if (!here)
+        {
+            std::snprintf(out, sizeof(out), "world %s; co-op %s", g_loadingSave ? "loading" : "not loaded", role);
+            return out;
+        }
+        std::snprintf(out, sizeof(out), "world loaded%s; co-op %s (%zu others); player at %.0f %.0f %.0f facing "
+            "%.0f deg in %08X; health %.0f / %.0f", game::InMenu() ? " (a menu is open)" : "", role,
+            g_coop.Remotes().size(), me.x, me.y, me.z, me.heading * 57.2957795f, me.space, game::Health(player),
+            game::MaxHealth(player));
+        return out;
+    }
+
+    // Text chat (Alex, October 2026): the chat key opens JIP's text box; a line sent goes to everyone and shows above
+    // the sender's character (a subtitle: with Floating Subtitles NVSE it floats above them), or in the corner when
+    // they're far away or not here.
+    std::vector<std::string> g_labChat;  // lab lines "say <text>", sent as if typed (without the line)
+    // The player's settings from the MCM menu's file, read again when it changes (MCM saves it when its menu closes).
+    std::string PlayerSettingsPath() { return PluginFolder() + "..\\..\\config\\NVCoop.ini"; }
+    void FollowPlayerSettings(uint32_t now)
+    {
+        static uint32_t s_nextLook = 0;
+        static FILETIME s_written = {};
+        if (!coop::IsDue(now, s_nextLook))
+            return;
+        s_nextLook = now + 2000;
+        WIN32_FILE_ATTRIBUTE_DATA data;
+        if (!GetFileAttributesExA(PlayerSettingsPath().c_str(), GetFileExInfoStandard, &data) ||
+            CompareFileTime(&data.ftLastWriteTime, &s_written) == 0)
+            return;
+        bool first = s_written.dwLowDateTime == 0 && s_written.dwHighDateTime == 0;
+        s_written = data.ftLastWriteTime;
+        if (first)
+            return;  // (read at load)
+        g_config.LoadPlayer(PlayerSettingsPath());
+        LOG_INFO("Settings: changed in the menu (chat %d, key %d, speech %d at %d%%, voice %d/%d pitch %d speed %d "
+            "effect %d, voice chat %d key %d mode %d at %d%%, radio %d, desync notices %d)", g_config.chat,
+            g_config.chatKey, g_config.chatSpeech, g_config.chatSpeechVolume, g_config.voice, g_config.voiceVariant,
+            g_config.voicePitch, g_config.voiceSpeed, g_config.voiceEffect, g_config.voiceChat, g_config.voiceChatKey,
+            g_config.voiceChatMode, g_config.voiceChatVolume, g_config.syncRadio, g_config.desyncNotices);
+    }
+
+    void UpdateChat()
+    {
+        static bool s_keyWas = false;
+        bool on = g_config.chat && g_coop.InGame() && g_worldLoaded;
+        if (!on && game::ChatTyping())
+            game::CancelChat();  // (a load mid-sentence: the keys go back to the game)
+        bool key = on && !game::ChatTyping() && game::IsKeyPressed(g_config.chatKey);
+        if (s_keyWas && !key && on && !game::ChatTyping())  // (on letting go: the key isn't typed into the line)
+            game::OpenChat();
+        s_keyWas = key;
+        std::vector<std::string> typed = game::UpdateChat();
+        for (std::string& t : g_labChat)
+            typed.push_back(std::move(t));
+        g_labChat.clear();
+        for (const std::string& text : typed)
+        {
+            std::string line = coop::CleanChat(text);
+            if (!on || line.empty())
+                continue;
+            LOG_INFO("Chat: we say \"%s\"", line.c_str());
+            coop::VoiceStyle style{static_cast<uint8_t>(g_config.voice), static_cast<uint8_t>(g_config.voiceVariant),
+                static_cast<int8_t>(g_config.voicePitch), static_cast<int8_t>(g_config.voiceSpeed),
+                static_cast<uint8_t>(g_config.voiceEffect)};
+            g_coop.SendChat(line, style);
+            if (g_config.chatSpeech)
+                g_speech.Say(line, g_coop.MyPlayerId(), style, g_config.chatSpeechVolume / 100.0f, 0);
+        }
+        for (const coop::Coop::ChatHeard& h : g_coop.TakeChat())
+        {
+            LOG_INFO("Chat: %s says \"%s\"", h.name.c_str(), h.text.c_str());
+            if (!g_config.chat)
+                continue;
+            TESObjectREFR* who = g_standIns.Character(h.player);
+            if (who && game::DistanceToPlayer(who) < 2500)
+                game::ShowChatAbove(h.player, who, h.text);
+            else
+                game::Notify((h.name + ": " + h.text).c_str(), 6);
+            coop::Pose me, them;
+            if (g_config.chatSpeech && who && game::GetPose(game::Player(), me) && game::GetPose(who, them) &&
+                me.space == them.space)
+            {
+                coop::SpeechMix mix = coop::MixSpeech(them.x - me.x, them.y - me.y, them.z - me.z, me.heading);
+                if (mix.volume > 0.02f)
+                    g_speech.Say(h.text, h.player, h.style, mix.volume * g_config.chatSpeechVolume / 100.0f, mix.pan);
+            }
+        }
+        game::UpdateChatAbove();
+        std::vector<std::pair<TESObjectREFR*, std::string>> friends;
+        if (g_config.friendMarkers && g_coop.InGame())
+            for (const auto& [id, remote] : g_coop.Remotes())
+                if (TESObjectREFR* who = g_standIns.Character(id))
+                    friends.push_back({who, g_coop.NameOf(id)});
+        game::ShowFriendMarkers(friends);
+    }
+
+    // Voice chat (Alex, October 2026: directional, gmod-style): push to talk (or an open mic: Steam leaves the
+    // silence out), through Steam's voice; the others' voices heard from where they are, as chat lines are.
+    bool g_labTalking = false;  // lab line "talk on|off": as if the key were held
+    double QpcMs(const LARGE_INTEGER& from, const LARGE_INTEGER& to)
+    {
+        static LARGE_INTEGER s_freq = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return f; }();
+        return 1000.0 * static_cast<double>(to.QuadPart - from.QuadPart) / static_cast<double>(s_freq.QuadPart);
+    }
+
+    void LetGo(uint32_t enemy)
+    {
+        if (g_forced.erase(enemy))
+            game::ForceTarget(game::LookupRef(enemy), nullptr);
+    }
+
+    // Host: each enemy a player hurt goes for the biggest threat among the players, looked at every second. Call
+    // before the stand-ins update: an enemy held to a player who left is let go before their character goes.
+    void UpdateThreats(uint32_t now, const coop::Pose& me)
+    {
+        bool hosting = g_coop.GetRole() == coop::Role::Host && g_coop.InGame();
+        // Every frame: none held to a character that's gone or was made again (a player who left, one the game
+        // unloaded): the game would read a character no longer there.
+        for (auto it = g_forced.begin(); it != g_forced.end();)
+        {
+            uint8_t player = it->second.player;
+            TESObjectREFR* character = !hosting ? nullptr : player == coop::kHostPlayerId ? game::Player() :
+                g_coop.Remotes().count(player) ? g_standIns.Character(player) : nullptr;
+            if (character && character == it->second.target)
+            {
+                ++it;
+                continue;
+            }
+            game::ForceTarget(game::LookupRef(it->first), nullptr);
+            it = g_forced.erase(it);
+        }
+        if (!hosting)
+        {
+            g_threats.Clear();
+            return;
+        }
+        if (!coop::IsDue(now, g_nextThreatLook))
+            return;
+        g_nextThreatLook = now + 1000;
+        for (uint32_t enemy : g_threats.Stale(now))
+        {
+            LetGo(enemy);
+            g_threats.Forget(enemy);
+        }
+        for (uint32_t enemy : g_threats.Enemies())
+        {
+            TESObjectREFR* e = game::LookupRef(enemy);
+            coop::Pose at;
+            if (!e || game::IsDead(e) || !game::GetPose(e, at))
+            {
+                LetGo(enemy);
+                g_threats.Forget(enemy);
+                continue;
+            }
+            // Only one already fighting, and never one of the party's: a player's stray shot mustn't start a fight
+            // (a companion turned on the host would).
+            if (game::IsTeammate(e) || !game::CombatTarget(e))
+            {
+                LetGo(enemy);
+                continue;
+            }
+            std::vector<coop::ThreatTable::Player> players;
+            if (me.space == at.space)
+                players.push_back({coop::kHostPlayerId, std::hypot(me.x - at.x, me.y - at.y), g_downed});
+            for (const auto& [id, remote] : g_coop.Remotes())
+            {
+                coop::Pose them;
+                TESObjectREFR* who = g_standIns.Character(id);
+                if (who && game::GetPose(who, them) && them.space == at.space)
+                    players.push_back({id, std::hypot(them.x - at.x, them.y - at.y), remote.Downed()});
+            }
+            int pick = g_threats.Pick(enemy, players, now);
+            if (pick < 0)
+            {
+                LetGo(enemy);
+                continue;
+            }
+            auto held = g_forced.find(enemy);
+            if (held != g_forced.end() && held->second.player == pick)
+                continue;
+            TESObjectREFR* target = pick == coop::kHostPlayerId ? game::Player() :
+                g_standIns.Character(static_cast<uint8_t>(pick));
+            if (!target)
+                continue;
+            game::ForceTarget(e, target);
+            g_forced[enemy] = HeldTo{static_cast<uint8_t>(pick), target};
+            LOG_DEBUG("Threat: %08X %s goes for %s", enemy, game::Name(e),
+                pick == coop::kHostPlayerId ? "the host" : g_coop.NameOf(static_cast<uint8_t>(pick)).c_str());
+        }
+    }
+
+    void UpdateVoice()
+    {
+        bool on = g_config.voiceChat && g_coop.InGame() && g_worldLoaded;
+        bool talk = on && !game::ChatTyping() &&
+            (g_config.voiceChatMode == 1 || g_labTalking || game::KeyDown(g_config.voiceChatKey));
+        static bool s_talking = false, s_warned = false;
+        if (talk != s_talking)
+        {
+            if (!game::VoiceRecording(talk) && talk && !s_warned)
+            {
+                s_warned = true;
+                LOG_WARN("Voice: Steam's voice isn't there; no voice chat");
+            }
+            s_talking = talk;
+            LOG_DEBUG("Voice: %s", talk ? "talking" : "stopped talking");
+        }
+        game::ShowTalking(talk && g_config.voiceChatMode == 0);
+        net::Bytes recorded;
+        for (int i = 0; i < 4 && game::TakeVoice(recorded); ++i)
+            g_coop.SendVoice(recorded);
+        std::vector<int16_t> samples;
+        for (const coop::Coop::VoiceHeard& v : g_coop.TakeVoice())
+            if (g_config.voiceChat && game::DecompressVoice(v.data, coop::kVoiceRate, samples))
+                g_voiceOut.Push(v.player, samples);
+        // Each voice from where its player is (nobody there: not heard).
+        coop::Pose me;
+        bool here = game::GetPose(game::Player(), me);
+        for (const auto& [id, remote] : g_coop.Remotes())
+        {
+            coop::Pose them;
+            TESObjectREFR* who = g_standIns.Character(id);
+            coop::SpeechMix mix{0, 0};
+            if (here && who && game::GetPose(who, them) && them.space == me.space)
+                mix = coop::MixSpeech(them.x - me.x, them.y - me.y, them.z - me.z, me.heading);
+            g_voiceOut.SetMix(id, mix.volume * g_config.voiceChatVolume / 100.0f, mix.pan);
+            // Their character's mouth opens and shuts with their voice or speech (gmod-style); shut once when they
+            // stop, then left to the game.
+            static std::map<uint8_t, bool> s_moving;
+            float opening = g_config.mouths ? coop::MouthOpening((std::max)(g_voiceOut.Level(id), g_speech.Level(id))) : 0;
+            bool& moving = s_moving[id];
+            if (who && (opening > 0 || moving))
+                game::SetMouth(who, opening);
+            moving = opening > 0;
+        }
+    }
+
+    // The save's mode (REBALANCE.md step 1): picked once, before a save starts (on a new game, or the first time a
+    // save from before is hosted), kept in it; the host's is the session's.
+    constexpr int kModeQuestion = 11;  // our AskChoice id
+    bool g_modeAsked = false;          // (till answered)
+    void AskSaveMode(bool newGame)
+    {
+        game::AskChoice(std::string(newGame ? "A new game: pick its mode." : "This save has no co-op mode yet: pick one.") +
+            "\n\nNormal is the game as it is. Co-op balanced is harder and made for a group (more of it is coming). "
+            "Friendly fire: players can hurt each other. It stays with this save and can't be changed later.",
+            coop::SaveModeButtons(), kModeQuestion);
+        g_modeAsked = true;
+        LOG_INFO("Mode: asked (%s)", newGame ? "a new game" : "hosting a save without one");
+    }
+    // The mode this game plays by: in a friend's game in co-op, the host's; otherwise this save's.
+    coop::SaveMode EffectiveMode()
+    {
+        return g_coop.GetRole() == coop::Role::Friend && g_coop.InGame() ? g_coop.SessionMode() : g_saveMode;
+    }
+
+    // Host, Co-op balanced, three players or more: generic enemies that start fighting the group bring extras
+    // (coop::Reinforcements), looked at every second, one made at a time.
+
+    // Co-op balanced: a generic enemy that died keeps part of its ammo (Alex, October 2026: scarcer across the board).
+    void UpdateLootThinning(uint32_t now)
+    {
+        if (g_coop.GetRole() == coop::Role::Friend || EffectiveMode().mode != coop::GameMode::Balanced ||
+            !coop::IsDue(now, g_nextThinLook))
+            return;
+        g_nextThinLook = now + 1000;
+        if (g_bodiesThinned.size() > 4096)
+            g_bodiesThinned.clear();  // (bodies already thinned keep what they have: thinned again at worst)
+        std::vector<TESObjectREFR*> actors;
+        game::NearbyActors(actors);
+        for (TESObjectREFR* a : actors)
+        {
+            uint32_t id = game::RefId(a);
+            if (a == game::Player() || !game::IsDead(a) || g_standIns.IsStandIn(a) || g_bodiesThinned.count(id))
+                continue;
+            g_bodiesThinned.insert(id);
+            if (game::IsGeneric(a))
+            {
+                int gone = game::ThinAmmo(a, static_cast<int>(coop::CoopBalance().bodyAmmoKept * 100 + 0.5f));
+                LOG_DEBUG("Balance: %08X %s's body keeps %.0f%% of its ammo (%d rounds taken)", id, game::Name(a),
+                    coop::CoopBalance().bodyAmmoKept * 100, gone);
+            }
+        }
+    }
+
+    void UpdateReinforcements(uint32_t now)
+    {
+        // (Extras made are cleared away whenever we host, however many are left; new ones need three players.)
+        if (g_coop.GetRole() != coop::Role::Host || !g_coop.InGame() || !coop::IsDue(now, g_nextReinforceLook))
+            return;
+        int players = 1 + static_cast<int>(g_coop.Remotes().size());
+        g_nextReinforceLook = now + 1000;
+        if (g_fightersSeen.size() > 4096)
+            g_fightersSeen.clear();  // (a long session without loads: counted again at worst)
+        // Extras dead or left behind, out of everyone's sight (6000 units from every player), are cleared away; a
+        // body near the group stays to be looted.
+        constexpr float kClearDistance = 6000;
+        int alive = 0;
+        for (auto it = g_extras.begin(); it != g_extras.end();)
+        {
+            TESObjectREFR* e = game::LookupRef(*it);
+            if (!e)
+            {
+                it = g_extras.erase(it);
+                continue;
+            }
+            coop::Pose at, p;
+            bool seen = false;
+            if (game::GetPose(e, at))
+            {
+                seen = game::GetPose(game::Player(), p) && p.space == at.space &&
+                    std::hypot(p.x - at.x, p.y - at.y) < kClearDistance;
+                for (const auto& [pid, remote] : g_coop.Remotes())
+                {
+                    TESObjectREFR* who = g_standIns.Character(pid);
+                    seen = seen || (who && game::GetPose(who, p) && p.space == at.space &&
+                        std::hypot(p.x - at.x, p.y - at.y) < kClearDistance);
+                }
+            }
+            if (!seen)
+            {
+                LetGo(*it);
+                g_threats.Forget(*it);
+                LOG_DEBUG("Bigger fights: extra %08X cleared away (%s)", *it, game::IsDead(e) ? "dead" : "left behind");
+                game::RemoveWorldItem(e);
+                it = g_extras.erase(it);
+                continue;
+            }
+            alive += !game::IsDead(e);
+            ++it;
+        }
+        if (players < 3 || EffectiveMode().mode != coop::GameMode::Balanced)
+            return;
+        std::vector<TESObjectREFR*> actors;
+        game::NearbyActors(actors);
+        TESObjectREFR *copyOf = nullptr, *copyTarget = nullptr;
+        for (TESObjectREFR* a : actors)
+        {
+            uint32_t id = game::RefId(a);
+            if (a == game::Player() || g_standIns.IsStandIn(a) || g_fightersSeen.count(id) || game::IsDead(a))
+                continue;
+            uint32_t targetId = game::CombatTarget(a);
+            TESObjectREFR* target = targetId ? game::LookupRef(targetId) : nullptr;
+            if (!target || (target != game::Player() && !g_standIns.IsStandIn(target)))
+                continue;  // (not fighting one of us)
+            g_fightersSeen.insert(id);
+            bool generic = game::IsGeneric(a);
+            LOG_DEBUG("Bigger fights: %08X %s fights one of us (%s)", id, game::Name(a), generic ? "generic" : "named: no extras");
+            if (!generic)
+                continue;
+            g_reinforcements.EnemyJoined(players);
+            copyOf = a;
+            copyTarget = target;
+        }
+        if (copyOf && g_reinforcements.Take(alive))
+            if (TESObjectREFR* made = game::PlaceExtraEnemy(copyOf, copyTarget))
+            {
+                g_extras.push_back(game::RefId(made));
+                g_fightersSeen.insert(game::RefId(made));
+                LOG_INFO("Bigger fights: an extra %s (%08X) joins, behind %08X (%d players, %d extras alive)",
+                    game::Name(made), game::RefId(made), game::RefId(copyOf), players, alive + 1);
+            }
+    }
+
+    // Co-op balanced's numbers on, or the game's own back, whenever the mode this game plays by changes.
+    void UpdateBalance()
+    {
+        static int s_applied = -1;  // (-1: nothing yet; 0 the game's own; 1 co-op balanced)
+        if (!g_worldLoaded || g_loadingSave)
+            return;
+        int balanced = EffectiveMode().mode == coop::GameMode::Balanced ? 1 : 0;
+        if (balanced == s_applied || (s_applied == -1 && !balanced))
+        {
+            s_applied = s_applied == -1 ? 0 : s_applied;  // (never changed: nothing to put back)
+            return;
+        }
+        if (game::ApplyBalance(balanced ? &coop::CoopBalance() : nullptr))
+            s_applied = balanced;
+    }
+
+    void UpdateSaveMode()
+    {
+        if (g_modeAsked)
+        {
+            int choice = game::TakeChoice(kModeQuestion);
+            if (choice != -1)
+            {
+                g_modeAsked = false;
+                coop::SaveMode picked = coop::SaveModeFromButton(choice);
+                if (picked.mode != coop::GameMode::Unset)
+                {
+                    g_saveMode = picked;
+                    LOG_INFO("Mode: %s (kept with the save from its next save)", coop::Describe(g_saveMode).c_str());
+                }
+            }
+        }
+        if (g_coop.GetRole() == coop::Role::Host)
+            g_coop.SetSessionMode(g_saveMode);
+        // Hosting a save from before the mode: asked once (not in a new game's tutorial: the new game asks).
+        static bool s_askedHosting = false;
+        if (!s_askedHosting && !g_modeAsked && g_saveMode.mode == coop::GameMode::Unset &&
+            g_coop.GetRole() == coop::Role::Host && g_coop.InGame() && g_worldLoaded &&
+            game::QuestStage(game::ids::kTutorialQuest) < 0)
+        {
+            s_askedHosting = true;
+            AskSaveMode(false);
+        }
+    }
+
+    // The mode kept next to each save: "<save>.nvcoop" (coop::EncodeSaveMode), written when it saves, read when it loads.
+    std::string SaveModePath(const std::string& save) { return SavesFolder() + save + ".nvcoop"; }
+    void KeepSaveMode(const std::string& save)
+    {
+        if (save.empty() || g_saveMode.mode == coop::GameMode::Unset)
+            return;
+        std::vector<uint8_t> data = coop::EncodeSaveMode(g_saveMode);
+        HANDLE f = CreateFileA(SaveModePath(save).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+        DWORD written = 0;
+        bool ok = f != INVALID_HANDLE_VALUE && WriteFile(f, data.data(), static_cast<DWORD>(data.size()), &written, nullptr) &&
+            written == data.size();
+        if (f != INVALID_HANDLE_VALUE)
+            CloseHandle(f);
+        LOG_INFO("Mode: %s kept with \"%s\"%s", coop::Describe(g_saveMode).c_str(), save.c_str(), ok ? "" : " (it couldn't!)");
+    }
+    void ReadSaveMode(const std::string& save)
+    {
+        g_saveMode = coop::SaveMode{};
+        uint8_t data[16] = {};
+        DWORD read = 0;
+        HANDLE f = save.empty() ? INVALID_HANDLE_VALUE :
+            CreateFileA(SaveModePath(save).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (f != INVALID_HANDLE_VALUE)
+        {
+            if (ReadFile(f, data, sizeof(data), &read, nullptr))
+                g_saveMode = coop::DecodeSaveMode(data, read);
+            CloseHandle(f);
+        }
+        LOG_INFO("Mode: \"%s\" is %s", save.c_str(), coop::Describe(g_saveMode).c_str());
+    }
+
+    // Quick start (Alex, October 2026; DESIGN build order 15): on a new game, skip Doc Mitchell's house: what his
+    // farewell does, the Hardcore question, out the front door, then the game's own "finish your character" box
+    // (name; looks, S.P.E.C.I.A.L., tag skills and traits), and Doc's starting gear for the tag skills picked.
+    constexpr int kQuickStartQuestion = 9;  // our AskChoice ids
+    constexpr int kHardcoreQuestion = 10;
+    enum class QuickStart { Watching, Asked, HardcoreAsked, Leaving, Revising, Saving };
+    QuickStart g_quickStart = QuickStart::Watching;
+    uint32_t g_quickStartAt = 0;
+    uint32_t g_quickStartSpace = 0;  // Doc's house (we're outside when we're somewhere else)
+    void UpdateQuickStart(uint32_t now)
+    {
+        if (!g_worldLoaded || g_loadingSave)
+            return;
+        // (The DLCs' intro popups: skipped or not as the setting says; the load order is needed for their ids.)
+        static int s_popupsSet = -1;
+        if (s_popupsSet != static_cast<int>(g_config.skipDlcPopups))
+        {
+            s_popupsSet = g_config.skipDlcPopups;
+            game::SkipIntroPopups(g_config.skipDlcPopups, game::LoadOrder());
+        }
+        static uint32_t s_nextLook = 0;
+        switch (g_quickStart)
+        {
+        case QuickStart::Watching:
+        {
+            if (!coop::IsDue(now, s_nextLook))
+                return;
+            s_nextLook = now + 500;
+            int stage = game::QuestStage(game::ids::kTutorialQuest);
+            static bool s_asked = false;  // (this game: asked once while it's waking up)
+            if (stage >= 0 && stage < 10 && game::QuestStage(game::ids::kBennyIntroQuest) >= 0)
+                return;  // (the intro is still on: the tutorial isn't really going yet)
+            if (stage < 0 || stage >= 10)
+            {
+                s_asked = false;
+                return;
+            }
+            if (s_asked)
+                return;
+            s_asked = true;
+            game::HoldTutorial(true);
+            if (g_saveMode.mode == coop::GameMode::Unset)
+                AskSaveMode(true);  // (first: the boxes wait in turn)
+            game::AskChoice("Quick start: skip Doc Mitchell's house?\n\nYou'll be outside his door with the game's "
+                "\"finish your character\" menu (name, looks, S.P.E.C.I.A.L., tag skills, traits) and Doc's starting "
+                "gear. Co-op starts once you're outside.", {"Quick start", "Play the intro"}, kQuickStartQuestion);
+            g_quickStart = QuickStart::Asked;
+            LOG_INFO("Quick start: a new game (tutorial stage %d); asked", stage);
+            return;
+        }
+        case QuickStart::Asked:
+        {
+            int choice = game::TakeChoice(kQuickStartQuestion);
+            if (choice == -1)
+                return;
+            if (choice != 0)
+            {
+                game::HoldTutorial(false);
+                g_quickStart = QuickStart::Watching;
+                return LOG_INFO("Quick start: no, the intro is played");
+            }
+            if (!game::LeaveTutorial())
+            {
+                g_quickStart = QuickStart::Watching;
+                return LOG_ERROR("Quick start: the tutorial's forms aren't there; the intro is played");
+            }
+            game::AskChoice("Play in Hardcore mode?\n\nFood, water and sleep needs, healing over time, ammo has "
+                "weight, companions can die. You can change it later in the game's settings.", {"No", "Hardcore"},
+                kHardcoreQuestion);
+            g_quickStart = QuickStart::HardcoreAsked;
+            g_quickStartAt = now;
+            return LOG_INFO("Quick start: Doc's farewell done; asking about Hardcore");
+        }
+        case QuickStart::HardcoreAsked:
+        {
+            // (Out the door only once the character has had time to get out of bed: 2026-10-17, going out at once
+            // left them lying on the ground outside, and the face blank in the looks menu.)
+            static int s_choice = -1;
+            if (s_choice == -1)
+                s_choice = game::TakeChoice(kHardcoreQuestion);
+            if (s_choice == -1 || now - g_quickStartAt < 4000)
+                return;
+            int choice = s_choice;
+            s_choice = -1;
+            game::RunConsoleLine(choice == 1 ? "SetHardcore 1" : "SetHardcore 0");
+            coop::Pose inside;
+            g_quickStartSpace = game::GetPose(game::Player(), inside) ? inside.space : 0;
+            game::ActivateByPlayer(game::ids::kDocsDoor, false);
+            g_quickStart = QuickStart::Leaving;
+            g_quickStartAt = now;
+            return LOG_INFO("Quick start: Hardcore %s; out the door", choice == 1 ? "on" : "off");
+        }
+        case QuickStart::Leaving:
+        {
+            coop::Pose me;
+            if (now - g_quickStartAt < 3000 || !game::GetPose(game::Player(), me) || me.space == g_quickStartSpace)
+            {
+                if (now - g_quickStartAt > 30000)
+                {
+                    g_quickStart = QuickStart::Watching;
+                    LOG_WARN("Quick start: still in Doc's house after 30 s; the rest is left to the player");
+                }
+                return;
+            }
+            // (A second outside first: the daylight eye adjustment starts just after we arrive, and stayed over the
+            // box with the world paused, the screen white.)
+            static uint32_t s_outsideAt = 0;
+            if (!s_outsideAt)
+                s_outsideAt = now;
+            if (now - s_outsideAt < 1000)
+                return;
+            s_outsideAt = 0;
+            game::RemoveTutorialFades();
+            game::ActivateByPlayer(game::ids::kReviseActivator, true);
+            g_quickStart = QuickStart::Revising;
+            g_quickStartAt = now;
+            return LOG_INFO("Quick start: outside; the \"finish your character\" box");
+        }
+        case QuickStart::Revising:
+            if (now - g_quickStartAt < 2000 || game::QuestStage(game::ids::kReviseQuest) >= 0)
+                return;
+            game::GiveStarterGear();
+            g_quickStart = QuickStart::Saving;
+            g_quickStartAt = now;
+            return LOG_INFO("Quick start: character finished; Doc's starting gear given");
+        case QuickStart::Saving:
+        {
+            // The finished character saved (Alex, 2026-10-19 session: the last save was the game's autosave from
+            // before the "finish your character" box, so Host Co-op loaded the character without its edits).
+            if (now - g_quickStartAt < 1500)
+                return;
+            g_quickStart = QuickStart::Watching;
+            std::string name;
+            for (const char* c = game::Name(game::Player()); *c && name.size() < 40; ++c)
+                if (std::isalnum(static_cast<unsigned char>(*c)) || *c == ' ' || *c == '-')
+                    name += *c;
+            std::string save = "Quick Start - " + (name.empty() ? std::string("Courier") : name);
+            game::RunConsoleLine(("save \"" + save + "\"").c_str());
+            return LOG_INFO("Quick start: saved as \"%s\"", save.c_str());
+        }
+        default:
+            return;
+        }
+    }
+
+    std::string RunLabLine(std::string line)
+    {
+        while (!line.empty() && line.back() == ' ')
+            line.pop_back();
+        while (!line.empty() && line.front() == ' ')
+            line.erase(line.begin());
+        LOG_INFO("Lab: %s", line.c_str());
+        if (line.empty())
+            return "empty line";
+        if (_stricmp(line.c_str(), "status") == 0)
+            return LabStatus();
+        if (line.compare(0, 10, "friendhit ") == 0 && g_coop.GetRole() == coop::Role::Friend)
+        {
+            // A friend's hit on the nearest living Powder Ganger, as if our player shot it (multi-target combat lab).
+            std::vector<TESObjectREFR*> actors;
+            game::NearbyActors(actors);
+            TESObjectREFR* nearest = nullptr;
+            for (TESObjectREFR* a : actors)
+                if (a != game::Player() && !game::IsDead(a) && std::strstr(game::Name(a), "Powder Ganger") &&
+                    (!nearest || game::DistanceToPlayer(a) < game::DistanceToPlayer(nearest)))
+                    nearest = a;
+            uint32_t hostRef = nearest ? g_npcs.HostRefOf(game::RefId(nearest)) : 0;
+            if (!hostRef)
+                return "no Powder Ganger copy near us";
+            g_coop.ReportHit(hostRef, static_cast<float>(std::atof(line.c_str() + 10)));
+            char out[64];
+            std::snprintf(out, sizeof(out), "hit the host's %08X", hostRef);
+            return out;
+        }
+        if (line.compare(0, 4, "say ") == 0)  // text chat, as if typed in the box
+        {
+            g_labChat.push_back(line.substr(4));
+            return "said";
+        }
+        if (line.size() == 6 && line.compare(0, 5, "mode ") == 0 && line[5] >= '0' && line[5] <= '3')
+        {
+            // Answers the save mode question (its buttons: 0 Normal, 1 with friendly fire, 2 Co-op balanced, 3 with).
+            if (!g_modeAsked)
+                return "no mode question open";
+            g_modeAsked = false;
+            game::DropQuestion(kModeQuestion);
+            g_saveMode = coop::SaveModeFromButton(line[5] - '0');
+            LOG_INFO("Mode: %s (kept with the save from its next save)", coop::Describe(g_saveMode).c_str());
+            return coop::Describe(g_saveMode);
+        }
+        if (line == "talk on" || line == "talk off")  // voice chat: as if the push-to-talk key were held
+        {
+            g_labTalking = line == "talk on";
+            return g_labTalking ? "talking" : "not talking";
+        }
+        if (line == "chatbox")  // text chat: the line opens for typing
+            return game::OpenChat() ? "opened" : "can't open";
+        if (line.compare(0, 5, "type ") == 0)  // text chat: typed into the line ("type enter", "type esc")
+        {
+            std::string what = line.substr(5);
+            if (what == "enter" || what == "esc")
+                game::TypeChat(what == "enter" ? '\r' : 0x1B);
+            else
+                for (char c : what)
+                    game::TypeChat(static_cast<unsigned char>(c));
+            return "typed";
+        }
+        if (line == "modfix yes" || line == "modfix no")  // answers "fetch the host's mods?" (step 8.6)
+        {
+            if (g_coop.GetFriendState() != coop::FriendState::FixingMods)
+                return "no mod question open";
+            g_modAsked = false;
+            game::DropQuestion(kModQuestion);  // (its box closes as if clicked)
+            g_coop.AnswerModFix(line == "modfix yes");
+            StartedFixing();
+            return "answered";
+        }
+        if (line == "approve yes" || line == "approve no")  // answers "let them in?" (step 8.5)
+        {
+            if (!g_openJoinAsk)
+                return "nobody is asking";
+            game::DropQuestion(kJoinQuestion);
+            AnswerJoinAsk(line == "approve yes");
+            return "answered";
+        }
+        if (line.size() == 6 && line.compare(0, 5, "pick ") == 0 && line[5] >= '0' && line[5] <= '9')
+        {
+            // Answers "join whose game?" (step 8.5): a button (Cancel is the last).
+            if (!g_askedWhoToJoin)
+                return "nothing to pick";
+            g_askedWhoToJoin = false;
+            game::DropQuestion(kJoinWhoQuestion);
+            size_t choice = static_cast<size_t>(line[5] - '0');
+            if (choice >= g_joinChoices.size())
+                return "cancelled";
+            JoinHost(g_joinChoices[choice]);
+            return "picked " + g_joinChoices[choice].label;
+        }
+        if (line == "menu host" || line == "menu join")  // as if clicked on the main menu (step 8.6)
+        {
+            (line == "menu host" ? HostClicked : JoinClicked)();
+            return "clicked";
+        }
+        if (line.compare(0, 17, "companion follow ") == 0 || line.compare(0, 15, "companion wait ") == 0)
+        {
+            // Lab (friend): as if picked in the companion menu (N: the host's id, decimal).
+            bool follow = line[10] == 'f';
+            uint32_t ref = static_cast<uint32_t>(std::strtoul(line.c_str() + (follow ? 17 : 15), nullptr, 10));
+            uint8_t leader = 0;
+            if (!g_coop.CompanionLeader(ref, leader))
+                return "not one of the group's companions";
+            g_coop.OrderCompanion(ref, follow ? net::CompanionOrderKind::FollowMe : net::CompanionOrderKind::Wait);
+            return "told";
+        }
+        if (line == "crashtest")  // lab: a crash on purpose, to see what the crash reporter logs
+        {
+            LOG_WARN("Lab: crashing on purpose");
+            *reinterpret_cast<volatile int*>(0x10) = 1;
+            return "";
+        }
+        if (line == "modfix cancel")  // lab: Cancel on the download's box
+        {
+            if (!g_coop.DownloadingMods())
+                return "not downloading";
+            g_coop.CancelModFix();
+            return "cancelled";
+        }
+        if (line == "quitgame")  // lab: the main menu's Exit Game, as "Quit the game" after fetching mods does
+        {
+            g_quitSoon = true;
+            return "quitting";
+        }
+        if (line == "loadwatch")
+        {
+            g_loadWatch = !g_loadWatch;
+            return g_loadWatch ? "watching loads" : "not watching loads";
+        }
+        if (_strnicmp(line.c_str(), "eval ", 5) == 0)
+            return g_worldLoaded ? game::Evaluate(line.c_str() + 5) : "no world loaded";
+        if (_strnicmp(line.c_str(), "note ", 5) == 0)
+            return "noted";
+        return game::RunConsoleLine(line.c_str()) ? "ran" : "the console didn't take it";
+    }
+
+    void RunLabLines()
+    {
+        uint32_t id;
+        std::string line;
+        // A few a frame; none while a save loads (they wait, up to the channel's timeout).
+        for (int i = 0; i < 4 && !g_loadingSave && g_lab.TakeCommand(id, line); ++i)
+            g_lab.Reply(id, RunLabLine(std::move(line)));
+    }
+
+    bool g_deferredInitDone = false;  // xNVSE's DeferredInit (the main menu is up)
+
+    // What all of NVCoop costs per frame, logged every 30 s while in co-op (CLAUDE.md: measure).
+    struct FrameCost
+    {
+        double sumMs = 0, mostMs = 0;
+        uint32_t frames = 0, nextLogAt = 0;
+    } g_frameCost;
+
+    // And what each part of it costs, logged with it: the parts averaging 0.02 ms or more, or taking 1 ms once.
+    enum FramePart
+    {
+        kPartMenus, kPartNetwork, kPartPlayer, kPartPlayers, kPartNpcs, kPartDoors, kPartContainers, kPartItems,
+        kPartQuests, kPartDialogue, kPartCompanions, kPartRadio, kPartSettings, kPartModes, kPartChat, kPartVoice,
+        kPartScripted, kPartSaves, kPartCount
+    };
+    const char* const kPartNames[kPartCount] = {"menus", "network", "player", "players", "NPCs", "doors", "containers",
+        "items", "quests", "dialogue", "companions", "radio", "settings", "modes", "chat", "voice", "scripted", "saves"};
+    coop::FrameParts g_frameParts;
+
+    // Times the frame's work part by part: each Done(part) counts the time since the last one (or the frame's start).
+    struct PartClock
+    {
+        void Done(FramePart part)
+        {
+            LARGE_INTEGER now;
+            QueryPerformanceCounter(&now);
+            double ms = QpcMs(m_last, now);
+            g_frameParts.Add(part, ms);
+            m_lastFrame[part] += ms;
+            m_last = now;
+        }
+        double m_lastFrame[kPartCount] = {};  // this frame's, part by part (for a hitch's line)
+        LARGE_INTEGER m_last{};
+    } g_partClock;
+
+    void EveryFrameWork();
+
+    // Hitches (Alex, 2026-10-19): a frame over 50 ms in all (the game's work and ours), logged with how much of it
+    // was ours and our biggest part, so a hitch can be told ours or the game's. (Not while loading.)
+    struct Hitches { uint32_t count = 0; double longestMs = 0; uint32_t nextLineAt = 0; } g_hitches;
+    double g_lastOursMs = 0;
+
+    void WatchHitches()
+    {
+        static LARGE_INTEGER s_last{};
+        LARGE_INTEGER at;
+        QueryPerformanceCounter(&at);
+        double gap = s_last.QuadPart ? QpcMs(s_last, at) : 0;
+        s_last = at;
+        if (gap < 50 || !g_worldLoaded || g_loadingSave || game::InLoadingScreen())
+            return;
+        Hitches& h = g_hitches;
+        ++h.count;
+        h.longestMs = gap > h.longestMs ? gap : h.longestMs;
+        uint32_t now = GetTickCount();
+        if (!coop::IsDue(now, h.nextLineAt))
+            return;
+        h.nextLineAt = now + 1000;
+        int biggest = 0;
+        for (int i = 1; i < kPartCount; ++i)
+            if (g_partClock.m_lastFrame[i] > g_partClock.m_lastFrame[biggest])
+                biggest = i;
+        char open[96], menus[128] = "";
+        game::OpenMenus(open, sizeof(open));
+        if (game::InMenuMode())
+            std::snprintf(menus, sizeof(menus), "; a menu is up (%s)", open);
+        LOG_INFO("Hitch: a frame took %.0f ms; NVCoop %.1f ms of it (most: %s, %.1f ms)%s", gap, g_lastOursMs,
+            kPartNames[biggest], g_partClock.m_lastFrame[biggest], menus);
+    }
+
+    void EveryFrame()
+    {
+        WatchHitches();
+        if (g_lab.Running())
+            RunLabLines();  // (not counted in the frame cost: lab lines can take a while)
+        // (The first frame after every plugin's DeferredInit: Real Time Menus takes the same checks there, and keeps
+        // none of the answers before its own.)
+        static bool s_escapeHooked = false;
+        if (g_deferredInitDone && !s_escapeHooked)
+        {
+            s_escapeHooked = true;
+            game::KeepWorldRunningInEscapeMenu();
+        }
+        game::EscapeMenuLive(g_coop.InGame());
+        if (g_config.borderless)
+            display::Update();
+        dev::EveryFrame();
+        LARGE_INTEGER start, end;
+        QueryPerformanceCounter(&start);
+        g_partClock.m_last = start;
+        for (double& part : g_partClock.m_lastFrame)
+            part = 0;
+        EveryFrameWork();
+        QueryPerformanceCounter(&end);
+        double ms = QpcMs(start, end);
+        g_lastOursMs = ms;
+        FrameCost& c = g_frameCost;
+        c.sumMs += ms;
+        c.mostMs = ms > c.mostMs ? ms : c.mostMs;
+        ++c.frames;
+        uint32_t now = GetTickCount();
+        if (!coop::IsDue(now, c.nextLogAt))
+            return;
+        if (c.nextLogAt && g_coop.InGame())
+        {
+            AddressSpace a = GetAddressSpace();
+            LOG_INFO("Frame cost: NVCoop took %.2f ms a frame on average (most %.2f) over %u frames; %u frames over 50 "
+                "ms in all (longest %.0f); address space %u MB free of %u", c.sumMs / c.frames, c.mostMs, c.frames,
+                g_hitches.count, g_hitches.longestMs, a.freeMb, a.totalMb);
+            g_hitches.count = 0;
+            g_hitches.longestMs = 0;
+            std::string parts = g_frameParts.Report(kPartNames, kPartCount, c.frames, 0.02, 1.0);
+            if (!parts.empty())
+                LOG_INFO("Frame cost by part (ms a frame): %s", parts.c_str());
+        }
+        else
+            g_frameParts = coop::FrameParts{};
+        c = FrameCost{0, 0, 0, now + 30000};
+    }
+
+    void WatchLoading()
+    {
+        static uint32_t last = 0;
+        static bool wasLoading = false;
+        uint32_t now = GetTickCount();
+        bool loading = g_worldLoaded && game::InLoadingScreen();
+        if (last && now - last > 300)
+            LOG_INFO("Load watch: %u ms since the last frame (world %d, loading screen %d)", now - last, g_worldLoaded,
+                loading);
+        if (loading != wasLoading)
+            LOG_INFO("Load watch: loading screen %s", loading ? "up" : "gone");
+        wasLoading = loading;
+        last = now;
+    }
+
+    // Loading (step 8.4): while someone is still loading after the group moved, everyone already here is frozen.
+    bool g_frozen = false;
+    uint32_t g_nextFreezeNotice = 0;
+
+    void UpdateFreeze(uint32_t now)
+    {
+        bool frozen = g_coop.InGame() && g_coop.Frozen();
+        if (frozen && coop::IsDue(now, g_nextFreezeNotice))
+        {
+            // Again every few seconds: a load can put the game's speed back.
+            g_nextFreezeNotice = now + 3000;
+            game::SetWorldSpeed(0.0001f);
+            game::Notify(("Waiting for " + g_coop.NameOf(g_coop.FrozenFor()) + " to finish loading...").c_str(), 3);
+        }
+        if (frozen == g_frozen)
+            return;
+        g_frozen = frozen;
+        LOG_INFO("Loading: %s", frozen ? "the world waits" : "the world goes on");
+        if (!frozen)
+        {
+            game::SetWorldSpeed(1.0f);
+            g_nextFreezeNotice = 0;
+        }
+    }
+
+    void EveryFrameWork()
+    {
+        if (g_loadWatch)
+            WatchLoading();
+        g_coop.Update();
+        g_partClock.Done(kPartNetwork);
+        std::string refused = g_coop.TakeRejectReason();
+        if (!refused.empty())
+            game::Notify(("Couldn't join: " + refused).c_str(), 10);
+        std::string modReport = g_coop.TakeModReport();
+        if (!modReport.empty() && !(g_menuMatched && g_worldLoaded))
+            game::ShowMessage(modReport);
+        if (g_modScan.valid() && g_modScan.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+            ConnectCoop();
+        game::RetryMessageBoxes();
+        FixMods(GetTickCount());
+        CheckModsAtMenu(GetTickCount());
+        AskAboutJoins();
+        MainMenuClicks();
+        // In co-op, others play on in our game (and we in theirs, or we're fetching mods), so it keeps running when
+        // it isn't the active window (playthrough test, 2026-10-16); afterwards, as it was.
+        static bool s_inCoop = false, s_wasRunning = false;
+        if ((g_coop.GetRole() != coop::Role::None) != s_inCoop)
+        {
+            s_inCoop = !s_inCoop;
+            if (s_inCoop)
+                s_wasRunning = game::RunInBackground(true);
+            else
+                game::RunInBackground(s_wasRunning);
+            LOG_INFO("Background: the game %s when it isn't the active window", s_inCoop || s_wasRunning ?
+                "keeps running" : "pauses again");
+        }
+        static bool s_shownHosting = false;
+        bool hosting = g_coop.GetRole() == coop::Role::Host;
+        static coop::SaveMode s_shownMode;
+        if ((hosting != s_shownHosting || (hosting && !(s_shownMode == g_saveMode))) && game::SteamReady())
+        {
+            s_shownHosting = hosting;
+            s_shownMode = g_saveMode;
+            game::SetHostingOnSteam(hosting, coop::Describe(g_saveMode));
+        }
+        if (g_coop.TakeAskingHost())
+            game::Notify("Co-op: asking the host to let you in...", 5);
+        g_partClock.Done(kPartMenus);
+        if (!g_worldLoaded)
+            return;
+
+        uint32_t now = GetTickCount();
+        UpdateFreeze(now);
+        g_mirror.Update(now);
+        g_inspector.Update(now);
+        if ((g_startSoon || g_waitingForIntro) && coop::IsDue(now, g_nextIntroCheck))
+        {
+            g_startSoon = false;
+            g_nextIntroCheck = now + 2000;
+            TryStartCoop();
+        }
+
+        // Hits. Our own go to the host (no friendly fire: not on friends' characters); the host applies friends'.
+        for (const game::Hit& hit : game::TakeHits())
+        {
+            TESObjectREFR* target = game::LookupRef(hit.targetRef);
+            TESObjectREFR* attacker = game::LookupRef(hit.attackerRef);
+            int friendId = g_standIns.PlayerIdOf(target);
+            if (target && target == game::Player())
+            {
+                // Friend: the host's world is the real one (DESIGN rule 1); its hits on us come as Damage.
+                if (g_coop.GetRole() == coop::Role::Friend && g_coop.InGame())
+                {
+                    game::ChangeHealth(target, hit.damage);
+                    g_tally.undone.Add(hit.damage);
+                    LOG_DEBUG("Undid a hit on us by our copy %08X (%.1f)", hit.attackerRef, hit.damage);
+                }
+                continue;
+            }
+            if (friendId < 0)
+            {
+                if (attacker == game::Player())
+                {
+                    // In the host's ids: our copy of an NPC its game made while playing has an id of our own (step
+                    // 5.4 test: hits on a gecko's copy never reached the host). None for one only we have.
+                    if (g_coop.GetRole() == coop::Role::Host && game::IsActor(target) && !game::IsTeammate(target))
+                        g_threats.Hurt(hit.targetRef, coop::kHostPlayerId, hit.damage, now);
+                    uint32_t hostRef = g_npcs.HostRefOf(hit.targetRef);
+                    if (!hostRef)
+                        continue;
+                    g_coop.ReportHit(hostRef, hit.damage);
+                    if (g_coop.GetRole() == coop::Role::Friend)
+                        g_tally.sent.Add(hit.damage);
+                }
+                continue;
+            }
+            // A friend's character: their health lives on their own game, so undo it here. On the host, hits
+            // from the world hurt the real friend (but not hits from players).
+            game::ChangeHealth(target, hit.damage);
+            if (attacker == game::Player() && g_coop.SessionMode().friendlyFire)
+            {
+                // Friendly fire (the host's save has it on): ours on another player goes to them, through the host.
+                LOG_DEBUG("Friendly fire: we hit player %d for %.1f", friendId, hit.damage);
+                g_coop.ReportPlayerHit(static_cast<uint8_t>(friendId), hit.damage);
+            }
+            // (Nor our copy of a mine their own game blew up: that hurt them there.)
+            bool theirOwnMine = !game::IsActor(attacker) && g_mines.SparedFrom(friendId, now);
+            if (g_coop.GetRole() == coop::Role::Host && attacker != game::Player() && !g_standIns.IsStandIn(attacker) &&
+                !game::IsTeammate(attacker) && !theirOwnMine)  // (our companions don't hurt friends either: the party's)
+            {
+                LOG_DEBUG("%08X hurt player %d for %.1f", hit.attackerRef, friendId, hit.damage);
+                g_coop.DamagePlayer(static_cast<uint8_t>(friendId), hit.damage);
+                g_tally.hurt.Add(hit.damage);
+            }
+        }
+        for (const coop::HitReport& hit : g_coop.TakeHits())
+            ApplyFriendHit(hit);
+        if (float damage = g_coop.TakeDamage(); damage > 0)
+        {
+            damage = coop::DamageTaken(damage, EffectiveMode().mode == coop::GameMode::Balanced);
+            game::ChangeHealth(game::Player(), -damage);
+            g_tally.taken.Add(damage);
+        }
+        if (g_coop.InGame())
+            LogCombat(now);
+        static uint32_t s_nextHealthCheck = 0;
+        static float s_health = 0, s_maxHealth = 0;
+        bool healthFresh = coop::IsDue(now, s_nextHealthCheck);
+        if (healthFresh)
+        {
+            s_nextHealthCheck = now + 100;
+            s_health = game::Health(game::Player());
+            s_maxHealth = game::MaxHealth(game::Player());
+            if (g_downed)
+                s_health = 0;  // down: 0 health for everyone else (we're kept at 1 so the game doesn't knock us out)
+            g_coop.SetMyHealth(s_health, s_maxHealth);
+        }
+
+        coop::Pose me;
+        if (!game::GetPose(game::Player(), me))
+            return;  // between places
+        me.flags = game::StanceFlags(game::Player());
+        me.moves = game::MovementFlags(game::Player());
+        if (game::IsJumping(game::Player()))
+            me.moves |= coop::moves::kJump;
+        g_coop.SetMyPose(me);
+        if (g_coop.InGame())
+            FollowGroup(now);
+        static uint32_t s_nextGearCheck = 0;
+        if (coop::IsDue(now, s_nextGearCheck))
+        {
+            s_nextGearCheck = now + 500;
+            g_coop.SetMyGear(game::PlayerGear());
+        }
+        // Explosions (step 8.8): ours go to the others (a friend's only its own player's: the host's game has the
+        // rest), and theirs are shown where they really went off.
+        for (const game::SeenExplosion& e : game::TakeExplosions())
+            if (g_coop.InGame() && (g_coop.GetRole() == coop::Role::Host || e.ours))
+                g_coop.ShareExplosion({e.form, e.space, e.x, e.y, e.z});
+        for (const net::ExplosionAt& e : g_coop.TakeExplosions())
+            if (e.space == me.space && std::hypot(e.x - me.x, e.y - me.y) < MaxHitDistance() &&
+                !g_mines.BlewNear(e.x, e.y, e.z, now))  // (the host's copy of our own mine's blast: seen already)
+            {
+                bool shown = game::ShowExplosion(e.form, e.space, e.x, e.y, e.z);
+                LOG_DEBUG("Explosions: %s %08X at %.0f, %.0f, %.0f", shown ? "showing" : "couldn't show", e.form, e.x,
+                    e.y, e.z);
+            }
+        game::MyAttack mine = game::TakeMyAttacks();
+        if (mine.shots)
+        {
+            g_coop.Attack(mine.shots);
+            g_mirror.Attack(mine.shots);
+        }
+        if (mine.release)
+        {
+            g_coop.Attack(0, true);  // our throw left our hand (step 8.8)
+            g_mirror.Attack(0, true);
+        }
+        g_partClock.Done(kPartPlayer);
+        UpdateThreats(now, me);
+        // The field of view (MCM): after every load and whenever it's changed; 0 puts the game's back (once).
+        static int s_fovSet = 0;
+        if (g_fovAfterLoad || g_config.fieldOfView != s_fovSet)
+        {
+            if ((!g_config.fieldOfView && !s_fovSet) || game::SetFieldOfView(g_config.fieldOfView))
+            {
+                s_fovSet = g_config.fieldOfView;
+                g_fovAfterLoad = false;
+            }
+        }
+        // How our character looks, for the others (sent when it changes: the looks menu, a barber).
+        static uint32_t s_nextLooksLook = 0;
+        if (g_coop.InGame() && coop::IsDue(now, s_nextLooksLook))
+        {
+            s_nextLooksLook = now + 5000;
+            net::PlayerLooks looks;
+            if (game::ReadMyLooks(looks))
+                g_coop.SetMyLooks(looks);
+        }
+        UpdateReinforcements(now);
+        UpdateLootThinning(now);
+        for (const coop::AttackReport& attack : g_coop.TakeAttacks())
+            g_standIns.Attack(attack.playerId, attack.shots, attack.release);
+        if (g_coop.InGame())
+            g_standIns.Update(g_coop, now, me);
+        else
+            g_standIns.RemoveAll();
+        g_partClock.Done(kPartPlayers);
+        if (g_coop.GetRole() == coop::Role::Host)
+            g_npcs.Share(g_coop, now, me, g_standIns);
+        else if (g_coop.InGame())
+        {
+            g_npcs.Update(g_coop, now, me, g_standIns);
+            g_npcs.CheckDesyncs(g_coop, now, me);
+            for (const net::NpcAttack& attack : g_coop.TakeNpcAttacks())
+                g_npcs.Attack(attack.ref, attack.shots, attack.reload, attack.release);
+        }
+        else
+            g_npcs.ReleaseAll();
+        g_partClock.Done(kPartNpcs);
+        // Desyncs (DESIGN rule 8): a corner message when one starts (at most one every 20 s; DesyncNotices=0: none).
+        static uint32_t s_nextDesyncNotice = 0;
+        for (const std::string& text : g_coop.TakeDesyncNotices())
+        {
+            if (g_config.desyncNotices && coop::IsDue(now, s_nextDesyncNotice))
+            {
+                s_nextDesyncNotice = now + 20000;
+                game::Notify(text.c_str(), 6);
+            }
+        }
+        g_doors.Update(g_coop, now);
+        g_mines.Update(g_coop, g_standIns, now);  // (timed with the doors)
+        g_partClock.Done(kPartDoors);
+        g_containers.Update(g_coop, now, g_npcs);
+        g_partClock.Done(kPartContainers);
+        g_items.Update(g_coop, now);
+        g_partClock.Done(kPartItems);
+        g_quests.Update(g_coop, now);
+        g_partClock.Done(kPartQuests);
+        g_dialogue.Update(now);
+        g_partClock.Done(kPartDialogue);
+        if (uint8_t player = 0; g_coop.GetRole() == coop::Role::Host)
+        {
+            uint32_t at = 0;
+            if (g_dialogue.LastFriendLine(player, at) && now - at < 1000)
+                g_companions.FriendLineRan(player, at);
+        }
+        g_companions.Update(g_coop, g_standIns, now);
+        g_partClock.Done(kPartCompanions);
+        if (game::TakeScriptKill())
+            g_coop.KilledByScript();
+        // Synced radios (Alex, October 2026): the host's stations pick the songs, friends' play the same.
+        bool radioFromHost = g_coop.GetRole() == coop::Role::Friend && g_coop.InGame() && g_config.syncRadio;
+        game::RadioFromHost(radioFromHost);
+        for (const auto& [station, line] : g_coop.TakeRadioLines())
+            if (radioFromHost)
+                game::HostRadioLine(line);
+        game::UpdateRadios();
+        g_partClock.Done(kPartRadio);
+        FollowPlayerSettings(now);
+        g_partClock.Done(kPartSettings);
+        UpdateSaveMode();
+        UpdateBalance();
+        UpdateQuickStart(now);
+        g_partClock.Done(kPartModes);
+        UpdateChat();
+        g_partClock.Done(kPartChat);
+        UpdateVoice();
+        g_partClock.Done(kPartVoice);
+        for (const game::RadioLineStart& p : game::TakeRadioLineStarts())
+            if (g_coop.GetRole() == coop::Role::Host)
+            {
+                LOG_DEBUG("Radio: station %08X plays %08X part %u (line %zu of %zu)", p.station, p.info, p.part,
+                    p.line + 1, p.run.size());
+                g_coop.ShareRadioLine(net::RadioLine{p.station, p.info, 0, 0, static_cast<uint8_t>(p.part), p.run}, now);
+            }
+            else if (p.fromHost)
+                LOG_DEBUG("Radio: station %08X plays the host's %08X", p.station, p.info);
+        // Scripted sequences: what quest scripts do to the host's player, every friend's game does to theirs.
+        game::MirrorPlayerCommands(g_coop.GetRole() == coop::Role::Host && g_coop.InGame());
+        game::ScreenFromHost(g_coop.GetRole() == coop::Role::Friend && g_coop.InGame());
+        for (const net::PlayerCommand& c : game::TakePlayerCommands())
+            g_coop.SharePlayerCommand(c);
+        for (const net::PlayerCommand& c : g_coop.TakePlayerCommands())
+            if (!game::ApplyPlayerCommand(c))
+                LOG_INFO("Scripted: couldn't do the host's command %u (%08X %08X) here", static_cast<unsigned>(c.kind),
+                    c.form, c.ref);
+        g_partClock.Done(kPartScripted);
+        if (g_coop.GetRole() == coop::Role::Friend)
+            AskAboutCompanion(now);
+        g_sleepWait.Update(now);
+        if (g_coop.GetRole() == coop::Role::Friend)
+            FollowHostSaves(now);
+        else if (g_coop.GetRole() == coop::Role::Host)
+            ServeFriendSaves();
+        g_progress.Update(g_coop, now);
+        UpdateDowned(now, me, s_health, s_maxHealth, healthFresh);
+
+        // The characters we made, noted in the game (it keeps them in saves) whenever they change.
+        if (coop::IsDue(now, g_nextMadeCheck))
+        {
+            g_nextMadeCheck = now + 1000;
+            std::vector<uint32_t> made = g_standIns.RefIds();
+            for (uint32_t id : g_npcs.MadeRefIds())
+                made.push_back(id);
+            for (uint32_t id : g_extras)  // (Co-op balanced's extra enemies: not left in saves either)
+                made.push_back(id);
+            std::sort(made.begin(), made.end());
+            if (made != g_notedMade)
+            {
+                game::NoteMadeCharacters(made);
+                g_notedMade = std::move(made);
+            }
+        }
+        g_partClock.Done(kPartSaves);
+    }
+
+    std::string g_savedForHost;            // our own save the host is saving for, until its save arrives
+
+    void FollowHostSaves(uint32_t now)
+    {
+        for (const net::SaveOrder& order : g_coop.TakeSaveOrders())
+        {
+            std::string name = coop::LinkedSaveName(g_coop.NameOf(0), order.name);
+            if (name.empty())
+                continue;
+            if (!order.load)
+            {
+                g_pendingLinkedSave = name;
+                if (!g_savedForHost.empty())
+                {
+                    g_ownSaves[coop::PlainName(g_coop.NameOf(0), "Host") + "\t" + g_savedForHost] = order.name;
+                    SaveOwnSaves();  // so loading our own save asks for this one, even after a restart
+                }
+                g_savedForHost.clear();
+                continue;
+            }
+            g_pendingLinkedSave.clear();
+            g_reportLoad = true;
+            LOG_INFO("Saves: the host is loading \"%s\"; loading ours, \"%s\"", order.name.c_str(), name.c_str());
+            g_expectedLoad = name;
+            g_expectLoadUntil = now + 3000;
+            game::RunConsoleLine(("load \"" + name + "\"").c_str());
+        }
+        if (!g_expectedLoad.empty() && coop::IsDue(now, g_expectLoadUntil))
+        {
+            // No such save here (made before linking, or deleted): we keep our character; the world syncs.
+            LOG_INFO("Saves: no \"%s\" here; keeping our character", g_expectedLoad.c_str());
+            game::Notify(("No save matching the host's here (" + g_expectedLoad + "): keeping your character").c_str());
+            g_expectedLoad.clear();
+            if (g_reportLoad)
+            {
+                g_reportLoad = false;
+                g_coop.LoadedHostSave();  // nothing to load: the world needn't wait for us
+            }
+            if (g_waitForHostLoad)
+            {
+                g_waitForHostLoad = false;
+                game::SetPlayerControls(true);
+            }
+        }
+        if (g_coop.TakeLoadRefused())
+        {
+            game::Notify((g_coop.NameOf(0) + " said no to loading that save for everyone").c_str());
+            LOG_INFO("Saves: the host said no to loading our save for everyone");
+        }
+        if (!g_pendingLinkedSave.empty() && !g_loadingSave && g_worldLoaded)
+        {
+            LOG_INFO("Saves: the host saved; saving ours as \"%s\"", g_pendingLinkedSave.c_str());
+            g_checkingSave = g_pendingLinkedSave;
+            g_saveAskedAt = FileTimeNow();
+            g_nextSaveCheck = now + 1500;
+            g_saveGiveUpAt = now + 60000;
+            g_saveTries = 1;
+            game::RunConsoleLine(("save \"" + g_pendingLinkedSave + "\"").c_str());
+            g_pendingLinkedSave.clear();
+        }
+        else if (!g_checkingSave.empty() && !g_loadingSave && g_worldLoaded && coop::IsDue(now, g_nextSaveCheck))
+        {
+            if (SavedSince(g_checkingSave, g_saveAskedAt))
+            {
+                LOG_INFO("Saves: ours is saved (\"%s\"%s)", g_checkingSave.c_str(),
+                    g_saveTries > 1 ? (", try " + std::to_string(g_saveTries)).c_str() : "");
+                g_checkingSave.clear();
+            }
+            else if (coop::IsDue(now, g_saveGiveUpAt))
+            {
+                LOG_WARN("Saves: the game wouldn't save ours (\"%s\") in a minute of trying; loading the host's "
+                    "save will keep our character as it is", g_checkingSave.c_str());
+                game::Notify("Co-op: couldn't save your game to match the host's save");
+                g_checkingSave.clear();
+            }
+            else if (game::InMenuMode())
+            {
+                // A conversation or menu (the game won't save then): wait it out, not counting it (Camel's game gave
+                // up talking to Ringo for a minute, 2026-10-19).
+                g_saveGiveUpAt = now + 60000;
+                g_nextSaveCheck = now + 1000;
+            }
+            else
+            {
+                // (The game refuses with enemies near, in some menus and scenes: try again in a moment.)
+                if (g_saveTries == 1)
+                    LOG_INFO("Saves: the game didn't save ours yet (enemies near?); trying again every 3 s");
+                ++g_saveTries;
+                g_nextSaveCheck = now + 3000;
+                game::RunConsoleLine(("save \"" + g_checkingSave + "\"").c_str());
+            }
+        }
+    }
+
+    // Host: a friend saved, so we save for everyone (a new save of ours, so friends get theirs); or a friend loaded
+    // their match of one of our saves, so we ask our player whether everyone loads it.
+    constexpr int kLoadQuestion = 2;  // our AskYesNo id
+    struct { uint8_t playerId = 0; std::string save; bool open = false; } g_loadAsk;
+
+    void ServeFriendSaves()
+    {
+        if (g_loadingSave || !g_worldLoaded)
+            return;
+        for (const coop::Coop::SaveAsk& ask : g_coop.TakeSaveAsks())
+        {
+            std::string who = g_coop.NameOf(ask.playerId);
+            if (!ask.load)
+            {
+                SYSTEMTIME t;
+                GetLocalTime(&t);
+                char when[32];
+                std::snprintf(when, sizeof(when), "%04u-%02u-%02u %02u-%02u-%02u", t.wYear, t.wMonth, t.wDay, t.wHour,
+                    t.wMinute, t.wSecond);
+                std::string name = coop::SaveForFriend(who, when);
+                if (name.empty())
+                    continue;
+                LOG_INFO("Saves: %s saved; saving for everyone as \"%s\"", who.c_str(), name.c_str());
+                game::RunConsoleLine(("save \"" + name + "\"").c_str());
+                game::Notify(("Saved for everyone (" + who + " saved)").c_str());
+                continue;
+            }
+            g_loadAsk.playerId = ask.playerId;
+            g_loadAsk.save = ask.name;
+            g_loadAsk.open = game::AskYesNo(who + " loaded \"" + ask.name + "\". Load it for everyone?", kLoadQuestion);
+            if (!g_loadAsk.open)
+                g_coop.RefuseLoad(ask.playerId);
+        }
+        int answer = g_loadAsk.open ? game::TakeAnswer(kLoadQuestion) : -1;
+        if (answer < 0)
+            return;
+        g_loadAsk.open = false;
+        LOG_INFO("Saves: %s loading \"%s\" for everyone", answer == 1 ? "yes to" : "no to", g_loadAsk.save.c_str());
+        if (answer == 1)
+            game::RunConsoleLine(("load \"" + g_loadAsk.save + "\"").c_str());
+        else
+            g_coop.RefuseLoad(g_loadAsk.playerId);
+    }
+
+    std::string OwnSavesFile() { return PluginFolder() + "NVCoopLinkedSaves.txt"; }
+
+    void LoadOwnSaves()
+    {
+        g_ownSaves.clear();
+        FILE* f = nullptr;
+        if (fopen_s(&f, OwnSavesFile().c_str(), "r") != 0 || !f)
+            return;
+        char line[512];
+        while (std::fgets(line, sizeof(line), f) && g_ownSaves.size() < 1000)
+        {
+            // host \t our save \t the host's save (anything else is skipped)
+            std::string text(line);
+            while (!text.empty() && (text.back() == '\n' || text.back() == '\r'))
+                text.pop_back();
+            size_t a = text.find('\t'), b = a == std::string::npos ? a : text.find('\t', a + 1);
+            if (b == std::string::npos)
+                continue;
+            std::string host = text.substr(0, a), own = text.substr(a + 1, b - a - 1), theirs = text.substr(b + 1);
+            if (coop::PlainName(host, "") == host && !host.empty() && coop::SaveNameOf(own) == own && !own.empty() &&
+                coop::SaveNameOf(theirs) == theirs && !theirs.empty())
+                g_ownSaves[host + "\t" + own] = theirs;
+        }
+        std::fclose(f);
+        LOG_INFO("Saves: %zu of our saves are linked to hosts' saves", g_ownSaves.size());
+    }
+
+    void SaveOwnSaves()
+    {
+        FILE* f = nullptr;
+        if (fopen_s(&f, OwnSavesFile().c_str(), "w") != 0 || !f)
+        {
+            LOG_WARN("Saves: couldn't write %s", OwnSavesFile().c_str());
+            return;
+        }
+        for (const auto& [key, theirs] : g_ownSaves)
+            std::fprintf(f, "%s\t%s\n", key.c_str(), theirs.c_str());
+        std::fclose(f);
+    }
+
+    // Friend: before any load. Our match of one of the host's saves (or our own save the host saved for) isn't
+    // loaded by us: the host is asked, and on yes everyone loads it (it then comes back as the host's order).
+    // Any other save isn't loaded in co-op: it isn't linked to the host's game (Alex, October 2026).
+    bool MayLoad(const std::string& save)
+    {
+        if (g_coop.GetRole() != coop::Role::Friend || !g_coop.InGame() || save == g_expectedLoad)
+            return true;
+        std::string hostSave = coop::HostSaveOf(g_coop.NameOf(0), save);
+        auto own = g_ownSaves.find(coop::PlainName(g_coop.NameOf(0), "Host") + "\t" + save);
+        if (hostSave.empty() && own != g_ownSaves.end())
+            hostSave = own->second;
+        if (hostSave.empty())
+        {
+            LOG_INFO("Saves: not loading \"%s\": it isn't linked to the host's game", save.c_str());
+            game::Notify(("That save isn't linked to " + g_coop.NameOf(0) + "'s game. Leave co-op to load it.").c_str());
+            return false;
+        }
+        LOG_INFO("Saves: not loading \"%s\" ourselves; asking the host to load \"%s\" for everyone", save.c_str(),
+            hostSave.c_str());
+        g_coop.AskHostToLoad(hostSave);
+        game::Notify(("Asking " + g_coop.NameOf(0) + " to load this save for everyone...").c_str());
+        return false;
+    }
+
+    std::string MessageText(const NVSEMessagingInterface::Message* msg)
+    {
+        return msg->data ? std::string(static_cast<const char*>(msg->data), strnlen(static_cast<const char*>(msg->data),
+            msg->dataLen)) : std::string();
+    }
+
+    void OnNVSEMessage(NVSEMessagingInterface::Message* msg)
+    {
+        switch (msg->type)
+        {
+        case NVSEMessagingInterface::kMessage_DeferredInit:
+            g_deferredInitDone = true;
+            break;
+        case NVSEMessagingInterface::kMessage_PostLoad:
+
+        {
+            LOG_INFO("All plugins loaded");
+            AddressSpace a = GetAddressSpace();
+            LOG_INFO("Address space: %u MB free of %u (4 GB patch: %s)", a.freeMb, a.totalMb, a.large ? "yes" :
+                "NO: the game can run out of memory and crash");
+            g_warnNoLargeAddress = !a.large;
+            // Needed by everyone in the game (DESIGN: requirements).
+            for (const wchar_t* dll : {L"jip_nvse.dll", L"kNVSE.dll", L"RealTimeMenus.dll"})
+                if (GetModuleHandleW(dll))
+                    LOG_INFO("Found %ls", dll);
+                else
+                    LOG_ERROR("%ls is missing: install it (JIP LN NVSE, kNVSE and Real Time Menus are needed for "
+                        "co-op)", dll);
+            CheckRealTimeMenus();
+            if (g_config.mode != Config::Mode::Off && !game::AddCoopToMainMenu(&HostClicked, &JoinClicked))
+                LOG_WARN("Main menu: couldn't add Host Co-op and Join Co-op (another plugin changed it?)");
+            g_dialogue.Install(g_coop, g_npcs, g_progress);
+            g_sleepWait.Install(g_coop);
+            LoadOwnSaves();
+            if (!game::InstallLoadCheck(&MayLoad))
+                LOG_WARN("Saves: couldn't hook loading (another plugin changed it?); friends' loads won't wait for the host");
+            game::ListenForHits();
+            if (!game::WatchExplosions())
+                LOG_WARN("Explosions: couldn't watch them; they won't line up on others' screens");
+            if (!game::WatchPlayerCommands())
+                LOG_WARN("Scripted: couldn't watch script commands; friends won't follow scripted sequences");
+            game::ListenForEnables();
+            CheckCrashReporter();
+            break;
+        }
+        case NVSEMessagingInterface::kMessage_MainGameLoop:
+            EveryFrame();
+            break;
+        case NVSEMessagingInterface::kMessage_PreLoadGame:
+        case NVSEMessagingInterface::kMessage_ExitToMainMenu:
+            if (msg->type == NVSEMessagingInterface::kMessage_PreLoadGame)
+            {
+                std::string file = MessageText(msg);
+                LOG_INFO("Loading a save: %s", file.c_str());
+                ReadSaveMode(coop::SaveNameOf(file));
+                g_coop.SetCurrentSave(coop::SaveNameOf(file));
+                if (g_coop.GetRole() == coop::Role::Host && g_coop.InGame())
+                    g_coop.ShareSave(file, true);  // friends load their matching saves (step 8.3)
+                g_expectedLoad.clear();
+                if (g_menuCheck != MenuCheck::Done && !g_coop.DownloadingMods())
+                {
+                    if (g_menuCheck == MenuCheck::Comparing)
+                        g_coop.Stop();
+                    g_menuCheck = MenuCheck::Done;
+                }
+            }
+            else
+            {
+                LOG_INFO("Back to the main menu");
+                if (g_coop.GetRole() != coop::Role::None)
+                    g_coop.Stop();  // leaving the game leaves co-op (joining again starts afresh)
+            }
+            g_loadingSave = msg->type == NVSEMessagingInterface::kMessage_PreLoadGame;
+            g_worldLoaded = false;
+            game::ForgetHolds();  // (the host crashed loading a save mid co-op, 2026-10-10)
+            g_gameOver = false;
+            g_standIns.Forget();  // the old world, and our characters in it, are going away
+            g_npcs.Forget();
+            g_doors.Forget();
+            g_mines.Forget();
+            g_progress.Forget();
+            g_coop.ForgetMyPlace();  // (a load isn't a trip through a door)
+            g_hasTravel = false;
+            g_inspector.Forget();
+            g_mirror.Stop();
+            break;
+        case NVSEMessagingInterface::kMessage_SaveGame:
+        {
+            std::string file = MessageText(msg);
+            LOG_INFO("Saved: %s", file.c_str());
+            KeepSaveMode(coop::SaveNameOf(file));
+            g_coop.SetCurrentSave(coop::SaveNameOf(file));
+            if (g_coop.GetRole() == coop::Role::Host && g_coop.InGame())
+                g_coop.ShareSave(file, false);  // friends save their matching saves (step 8.3)
+            if (g_coop.GetRole() == coop::Role::Friend && g_coop.InGame())
+            {
+                // Our own save (not a match of the host's, nor a door's autosave): everyone saves.
+                std::string name = coop::SaveNameOf(file);
+                if (!name.empty() && name.compare(0, 8, "Co-op - ") != 0 && !coop::IsAutosave(name))
+                {
+                    LOG_INFO("Saves: we saved \"%s\"; the host saves for everyone", name.c_str());
+                    g_coop.AskHostToSave(name);
+                    g_savedForHost = name;
+                }
+            }
+            break;
+        }
+        case NVSEMessagingInterface::kMessage_PostLoadGame:
+            g_loadingSave = false;
+            LOG_INFO("Save loaded");
+            OnWorldLoaded();
+            break;
+        case NVSEMessagingInterface::kMessage_NewGame:
+            g_loadingSave = false;
+            g_saveMode = coop::SaveMode{};
+            LOG_INFO("New game started");
+            OnWorldLoaded();
+            break;
+        case NVSEMessagingInterface::kMessage_ExitGame:
+        case NVSEMessagingInterface::kMessage_ExitGame_Console:
+            g_coop.Stop();
+            g_lab.Stop();
+            game::StopVoice();
+            Log::Flush();
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+extern "C" {
+
+bool NVSEPlugin_Query(const NVSEInterface* nvse, PluginInfo* info)
+{
+    info->infoVersion = PluginInfo::kInfoVersion;
+    info->name = "NVCoop";
+    info->version = NVCOOP_VERSION_NUMBER;
+
+    // The game editor (GECK) also loads plugins; we only run in the game.
+    if (nvse->isEditor)
+        return false;
+
+    Log::Open("");
+    LOG_INFO("NVCoop %s starting (xNVSE %08X, game %08X)",
+        NVCOOP_VERSION_STRING, nvse->nvseVersion, nvse->runtimeVersion);
+
+    if (nvse->runtimeVersion != RUNTIME_VERSION_1_4_0_525)
+    {
+        LOG_ERROR("Unsupported game version %08X: needs the Steam version 1.4.0.525", nvse->runtimeVersion);
+        return false;
+    }
+    // Developer-only, read here (not with the other settings) to run before other plugins change game code.
+    if (GetPrivateProfileIntA("Coop", "DumpGameCode", 0, (PluginFolder() + "NVCoop.ini").c_str()) == 1 &&
+        !DumpGameImage("NVCoop-game-memory.exe"))
+        LOG_ERROR("Couldn't save the game's program from memory");
+    return true;
+}
+
+bool NVSEPlugin_Load(NVSEInterface* nvse)
+{
+    g_handle = nvse->GetPluginHandle();
+    InstallCrashReporter();
+    g_config = Config::Load(PluginFolder() + "NVCoop.ini");
+    g_config.LoadPlayer(PlayerSettingsPath());
+    if (g_config.allowSecondCopy)
+        AllowSecondCopy(g_config.secondCopyWaits);
+    if (g_config.borderless)
+        display::Install();
+    if (g_config.blockDiscordOverlay)
+        BlockCrashingDlls();
+    if (!game::Init(nvse))
+        return false;
+
+    auto* messaging = static_cast<NVSEMessagingInterface*>(nvse->QueryInterface(kInterface_Messaging));
+    if (!messaging || !messaging->RegisterListener(g_handle, "NVSE", OnNVSEMessage))
+    {
+        LOG_ERROR("Couldn't listen for xNVSE messages");
+        return false;
+    }
+
+    dev::RegisterCommands(nvse, &g_inspector, &g_mirror);
+    if (g_config.labChannel && g_lab.Start(L"\\\\.\\pipe\\NVCoopLab"))
+        LOG_INFO("Lab channel open (\\\\.\\pipe\\NVCoopLab): tools on this PC, for this Windows user only, can run "
+            "console lines in the game");
+    LOG_INFO("Hello from NVCoop! Plugin loaded");
+    return true;
+}
+
+}

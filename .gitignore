@@ -1,0 +1,43 @@
+# Visual Studio / build output
+.vs/
+build/
+out/
+bin/
+obj/
+x64/
+Debug/
+Release/
+*.user
+*.suo
+*.vcxproj.filters.user
+*.aps
+*.ipch
+*.pdb
+*.ilk
+*.obj
+*.exp
+*.lib
+*.dll
+*.log
+*.dmp
+
+# Personal Claude settings (shared ones go in .claude/settings.json)
+.claude/settings.local.json
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Personal build settings (game path etc.)
+CMakeUserPresets.json
+for-friend/
+
+# Other projects' source code, read for reference only (see reference/README.md)
+reference/*
+!reference/README.md
+
+# Downloaded mods (installed into the game, not part of the project)
+Mod dependencies/
+tools/laptop.local.ini
+__pycache__/
