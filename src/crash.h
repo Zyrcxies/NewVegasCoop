@@ -14,3 +14,7 @@ struct AddressSpace
 AddressSpace GetAddressSpace();
 // Puts ours back in front if something replaced it since (theirs is still called after ours). Safe to repeat.
 void CheckCrashReporter();
+// Freezes (3-player session, 2026-10-27: a friend's game stopped for 27 s at a time after level-ups, and the log said
+// nothing in between): FreezeBeat from the game thread every frame (watch: in co-op); if the frames stop for 8 s while
+// watched, another thread logs where the game thread is (once per freeze, a few times a session).
+void FreezeBeat(bool watch);

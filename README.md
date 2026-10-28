@@ -32,5 +32,5 @@ assistant. No game code is included.
 
 ## License
 See [LICENSE](LICENSE). In short: use it and change it however you like; don't reupload the original; you may share
-a meaningfully changed version if you credit this project, say it's modified and not the official mod, and include
-the license.
+a meaningfully changed version (or a project using its code) if you credit this project, say it's modified and not
+the official mod, include the license, and publish its full source code under this same license.

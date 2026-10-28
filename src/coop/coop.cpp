@@ -93,6 +93,7 @@ namespace coop
         m_downedSince.clear();
         m_attacks.clear();
         m_gameOverSent = m_revived = m_gameOver = false;
+        m_hostSaysFighting = false;
         m_hasPlace = m_expecting = m_hasTravel = m_hasGroupPlace = m_regroup = false;
         m_myNpcs.clear();
         m_sentNpcs.clear();
@@ -1127,6 +1128,12 @@ namespace coop
             if (m_friendState == FriendState::Joined && Decode(r, m))
                 PullMe(m.playerId, Pose{m.space, m.x, m.y, m.z, m.heading});
         }
+        else if (type == MsgType::Fighting)
+        {
+            net::Fighting m;
+            if (Decode(r, m))
+                m_hostSaysFighting = m.fighting;
+        }
         else if (type == MsgType::Damage)
         {
             Damage m;
@@ -1450,6 +1457,18 @@ namespace coop
             SendToJoined(msg, true);
         else
             m_net->Send(1, msg, true);
+    }
+
+    void Coop::SetFighting(uint8_t playerId, bool fighting)
+    {
+        if (m_role != Role::Host)
+            return;
+        for (auto& [peer, p] : m_players)
+            if (p.joined && p.id == playerId && p.fighting != fighting)
+            {
+                p.fighting = fighting;
+                m_net->Send(peer, Encode(net::Fighting{fighting}), true);
+            }
     }
 
     void Coop::DamagePlayer(uint8_t playerId, float amount)

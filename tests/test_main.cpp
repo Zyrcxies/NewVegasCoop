@@ -4460,3 +4460,43 @@ TEST(friend_items_dont_bring_back_what_the_host_just_took)
     a = items.Look({caps}, true, 3000);
     CHECK(a.enable.empty() && a.differ.empty());
 }
+
+// Level-up screens wait out fights for friends too (3-player session, 2026-10-27: they opened mid-fight, since a
+// friend's game's enemies are copies that fight nobody): the host says when enemies are going for a friend's character.
+TEST(the_host_tells_friends_when_enemies_fight_them)
+{
+    MsgType t;
+    net::Fighting m;
+    Bytes on = Encode(net::Fighting{true});
+    Reader r(on);
+    CHECK(r.Type(t) && t == MsgType::Fighting && Decode(r, m) && m.fighting);
+    Bytes bad = on;
+    bad.back() = 2;  // neither yes nor no
+    Reader rb(bad);
+    CHECK(rb.Type(t) && !Decode(rb, m));
+
+    coop::Coop host, a, b2;
+    CHECK(host.Host(kTestPort, "Host"));
+    CHECK(a.Join("127.0.0.1", kTestPort, "Ann"));
+    CHECK(b2.Join("127.0.0.1", kTestPort, "Bob"));
+    CHECK(RunUntil({&host, &a, &b2}, [&] {
+        return a.GetFriendState() == coop::FriendState::Joined && b2.GetFriendState() == coop::FriendState::Joined;
+    }));
+    CHECK(!a.HostSaysFighting() && !b2.HostSaysFighting());
+    uint8_t ann = 0;
+    for (const auto& [id, remote] : host.Remotes())
+        if (remote.name == "Ann")
+            ann = id;
+    CHECK(ann != 0);
+    host.SetFighting(ann, true);
+    CHECK(RunUntil({&host, &a, &b2}, [&] { return a.HostSaysFighting(); }));
+    CHECK(!b2.HostSaysFighting());  // (only hers)
+    host.SetFighting(ann, false);
+    CHECK(RunUntil({&host, &a, &b2}, [&] { return !a.HostSaysFighting(); }));
+    host.SetFighting(ann, true);
+    CHECK(RunUntil({&host, &a, &b2}, [&] { return a.HostSaysFighting(); }));
+    a.Stop();
+    CHECK(!a.HostSaysFighting());  // (gone with the game: a level-up can't wait forever)
+    b2.Stop();
+    host.Stop();
+}

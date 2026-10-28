@@ -18,7 +18,7 @@
 namespace net
 {
     // Bump whenever any message changes; players must match exactly.
-    constexpr uint32_t kProtocolVersion = 62;
+    constexpr uint32_t kProtocolVersion = 63;
     constexpr size_t kMaxNameLength = 32;
     constexpr size_t kMaxReasonLength = 200;
     constexpr size_t kMaxMessageSize = 64 * 1024;
@@ -89,6 +89,7 @@ namespace net
         VoiceData = 59,          // both ways: voice chat (Steam's squeezed voice; friend -> host: theirs; host -> friends: whose)
         PlayerLooks = 61,        // both ways: how a player's character looks (friend -> host: theirs; host -> friends: whose)
         NpcPile = 62,            // friend -> host: the host's NPC turned to goo or ash in my game (my energy weapon)
+        Fighting = 64,           // host -> friend: enemies are fighting your character (or have stopped)
         MineChange = 63,         // both ways: a mine placed in the world was disarmed, or is gone, in my game
                                  // (friend -> host: theirs; host -> friends: anyone's)
         ModsMatch = 48,          // host -> friend who only checks (at the main menu): your mods are mine; bye
@@ -280,6 +281,15 @@ namespace net
     };
     Bytes Encode(const MineChange& m);
     bool Decode(Reader& r, MineChange& m);
+    // Whether enemies in the host's game are going for a friend's character (3-player session, 2026-10-27: friends'
+    // level-up screens opened mid-fight; the game holds it while its player is fought, and in a friend's game the
+    // enemies are our copies, which fight nobody). Sent when it changes.
+    struct Fighting
+    {
+        bool fighting = false;
+    };
+    Bytes Encode(const Fighting& m);
+    bool Decode(Reader& r, Fighting& m);
     constexpr uint8_t kNpcDead = 0x80;     // NpcState flag: it's dead (its pose is where its body is)
     constexpr uint8_t kNpcDown = 0x40;     // knocked out (essential NPCs at 0 health, for one)
     constexpr uint8_t kNpcSitting = 0x20;  // sitting, or sitting down or getting up

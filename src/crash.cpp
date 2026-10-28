@@ -3,6 +3,7 @@
 #include "game/game.h"
 #include "log.h"
 
+#include <atomic>
 #include <crtdbg.h>
 #include <cstdint>
 #include <csignal>
@@ -239,6 +240,77 @@ AddressSpace GetAddressSpace()
         a.totalMb = static_cast<unsigned>(m.ullTotalVirtual >> 20);
     }
     return a;
+}
+
+namespace
+{
+    std::atomic<DWORD> g_lastBeat{0};
+    std::atomic<bool> g_watchFrames{false};
+    HANDLE g_gameThread = nullptr;
+
+    DWORD WINAPI FreezeWatch(void*)
+    {
+        int reports = 0;
+        bool reported = false;
+        for (;;)
+        {
+            Sleep(1000);
+            DWORD since = GetTickCount() - g_lastBeat.load();
+            if (since < 8000 || !g_watchFrames.load())
+            {
+                reported = false;
+                continue;
+            }
+            if (reported || reports >= 5)
+                continue;
+            reported = true;
+            ++reports;
+            // Only the context and raw stack while it's stopped (nothing that takes a lock it may hold), then
+            // named after it runs again.
+            CONTEXT c = {};
+            c.ContextFlags = CONTEXT_FULL;
+            uintptr_t found[32];
+            int n = 0;
+            if (SuspendThread(g_gameThread) == static_cast<DWORD>(-1))
+                continue;
+            bool got = GetThreadContext(g_gameThread, &c) != 0;
+            if (got)
+                n = ScanStack(c.Esp, found, 32);
+            ResumeThread(g_gameThread);
+            if (!got)
+                continue;
+            char at[96];
+            Describe(c.Eip, at, sizeof(at));
+            LOG_WARN("Freeze: the game has stopped for %lu s (a loading screen, or stuck); it's at %s",
+                static_cast<unsigned long>(since / 1000), at);
+            std::string line;
+            char one[96];
+            for (int i = 0; i < n; ++i)
+            {
+                Describe(found[i], one, sizeof(one));
+                line += (line.empty() ? "" : ", ") + std::string(one);
+                if ((i + 1) % 8 == 0 || i + 1 == n)
+                {
+                    LOG_WARN("Freeze stack: %s", line.c_str());
+                    line.clear();
+                }
+            }
+        }
+    }
+}
+
+void FreezeBeat(bool watch)
+{
+    if (!g_gameThread)
+    {
+        DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &g_gameThread,
+            THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, 0);
+        if (g_gameThread)
+            if (HANDLE t = CreateThread(nullptr, 64 * 1024, FreezeWatch, nullptr, 0, nullptr))
+                CloseHandle(t);
+    }
+    g_lastBeat.store(GetTickCount());
+    g_watchFrames.store(watch);
 }
 
 void InstallCrashReporter()

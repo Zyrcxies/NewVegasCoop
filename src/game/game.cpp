@@ -548,6 +548,9 @@ namespace game
             "  SetIgnoreFriendlyHits 1\n"
             "  SetActorValue Aggression 0\n"
             "  SetActorValue Assistance 0\n"
+            // Foolhardy: never flees or cowers (3-player session, 2026-10-27: puppets went into the game's cower
+            // idle, CowerIdles, with enemies near: the Traveler they're copied from is Cautious, 1).
+            "  SetActorValue Confidence 4\n"
             "  SetCombatDisabled 1\n"  // JIP: it never starts fighting (a puppet attacks only when its player does)
             "  if rFaction\n"
             "    AddToFaction rFaction 0\n"
@@ -3916,6 +3919,44 @@ namespace game
         // (As ShowExplosion, but the real one: PlaceAtCell gives it no owner, like a mine going off by itself.)
         g_scripts->CallFunctionAlt(g_placeAt, Player(), 5, explosion, where, FloatArg(mine->posX), FloatArg(mine->posY),
             FloatArg(mine->posZ));
+        return true;
+    }
+
+    namespace
+    {
+        std::atomic<bool> g_holdLevelUp{false};
+        uintptr_t g_combatCount = 0;  // what the HUD's level-up checks called before us
+
+        int __fastcall LevelUpCombatCount(void* player, void*)
+        {
+            uintptr_t original = g_combatCount ? g_combatCount : addr::kPlayerCombatCount;
+            int count = reinterpret_cast<int(__thiscall*)(void*)>(original)(player);
+            return count < 1 && g_holdLevelUp.load(std::memory_order_relaxed) ? 1 : count;
+        }
+    }
+
+    bool HoldLevelUp(bool fighting)
+    {
+        g_holdLevelUp.store(fighting, std::memory_order_relaxed);
+        static int hooked = -1;
+        if (hooked >= 0)
+            return hooked == 1;
+        hooked = 0;
+        for (uintptr_t site : addr::kLevelUpCombatCalls)
+        {
+            uintptr_t was = HookCall(site, reinterpret_cast<const void*>(&LevelUpCombatCount));
+            if (!was)
+            {
+                LOG_WARN("Level up: %08X isn't a call; a friend's level-up screen may open mid-fight",
+                    static_cast<unsigned>(site));
+                return false;
+            }
+            if (was != addr::kPlayerCombatCount)
+                LOG_INFO("Level up: another plugin hooks its combat check too (%08X); ours passes on to it",
+                    static_cast<unsigned>(was));
+            g_combatCount = was;
+        }
+        hooked = 1;
         return true;
     }
 

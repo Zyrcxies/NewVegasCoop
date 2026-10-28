@@ -12,14 +12,17 @@ as published by the author.
    or in part, in source or built form, anywhere (mod sites, file hosts, modpacks, collections that bundle files,
    and so on), except by linking to the author's own pages.
 
-3. Modified versions. You may distribute a version you have meaningfully changed (a "Modified Version"), in source
-   or built form, as long as:
+3. Modified versions. You may distribute a version you have meaningfully changed, or another work that contains
+   code taken from the Software (either one a "Modified Version"), in source or built form, as long as:
    a. the changes are substantial: a renamed, repackaged or trivially altered copy of the Software is not a
       Modified Version and falls under section 2;
    b. it clearly credits the original ("based on New Vegas Co-op by Zyrcxies") with a link to the original project;
    c. it clearly says it is modified and is not the official New Vegas Co-op, and does not use the name
       "New Vegas Co-op" as its own name; and
-   d. this license file is included with it.
+   d. this license file is included with it; and
+   e. it is open source: its complete source code (everything needed to build it) is publicly available, free of
+      charge, under this same license, for as long as you distribute it. Anyone may then use, change and share it
+      on these same terms, and the same applies to anything derived from it in turn.
 
 4. Other people's work. Parts of the project come from others under their own licenses (for example xNVSE in
    external/). Those parts are covered by their own licenses, not this one.

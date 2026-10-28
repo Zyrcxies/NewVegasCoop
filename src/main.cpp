@@ -817,6 +817,8 @@ namespace
         }
     }
 
+    bool QuickStartBusy();
+
     // Co-op only runs once the character is made and out of Doc Mitchell's house (DESIGN.md).
     void TryStartCoop()
     {
@@ -826,7 +828,9 @@ namespace
             g_waitingForIntro = false;
             return;
         }
-        if (!game::IsPastIntro())
+        // (Quick start: out of the house before the character is finished; joining then left a friend's "finish
+        // your character" screen up in the host's game, 3-player session, 2026-10-27. It's done once it's saved.)
+        if (!game::IsPastIntro() || QuickStartBusy())
         {
             if (!g_waitingForIntro)
             {
@@ -1253,6 +1257,39 @@ namespace
 
     // Host: each enemy a player hurt goes for the biggest threat among the players, looked at every second. Call
     // before the stand-ins update: an enemy held to a player who left is let go before their character goes.
+    // Level-up screens wait out fights for friends too (3-player session, 2026-10-27: theirs opened mid-fight, as
+    // their game's enemies are our copies, which fight nobody): the host tells each friend whether enemies are going
+    // for their character, and a friend's game holds the screen while they are.
+    void UpdateFighting(uint32_t now)
+    {
+        bool friendGame = g_coop.InGame() && g_coop.GetRole() == coop::Role::Friend;
+        bool fighting = friendGame && g_coop.HostSaysFighting();
+        static bool s_held = false;
+        if (fighting != s_held)
+            LOG_INFO("Level up: %s", fighting ? "enemies are going for us in the host's game; any level-up waits" :
+                "no enemies going for us; a level-up can show");
+        s_held = fighting;
+        game::HoldLevelUp(fighting);
+
+        static uint32_t s_nextLook = 0;
+        if (g_coop.GetRole() != coop::Role::Host || !g_coop.InGame() || !coop::IsDue(now, s_nextLook))
+            return;
+        s_nextLook = now + 500;
+        std::map<uint8_t, int> enemies;
+        std::vector<TESObjectREFR*> actors;
+        game::NearbyActors(actors);
+        for (TESObjectREFR* a : actors)
+        {
+            if (a == game::Player() || g_standIns.IsStandIn(a) || game::IsDead(a) || game::IsTeammate(a))
+                continue;
+            if (uint32_t target = game::CombatTarget(a))
+                if (int id = g_standIns.PlayerIdOf(game::LookupRef(target)); id >= 0)
+                    ++enemies[static_cast<uint8_t>(id)];
+        }
+        for (const auto& [id, remote] : g_coop.Remotes())
+            g_coop.SetFighting(id, enemies.count(id) > 0);
+    }
+
     void UpdateThreats(uint32_t now, const coop::Pose& me)
     {
         bool hosting = g_coop.GetRole() == coop::Role::Host && g_coop.InGame();
@@ -1587,6 +1624,7 @@ namespace
     constexpr int kHardcoreQuestion = 10;
     enum class QuickStart { Watching, Asked, HardcoreAsked, Leaving, Revising, Saving };
     QuickStart g_quickStart = QuickStart::Watching;
+    bool QuickStartBusy() { return g_quickStart != QuickStart::Watching; }  // asked, or still making the character
     uint32_t g_quickStartAt = 0;
     uint32_t g_quickStartSpace = 0;  // Doc's house (we're outside when we're somewhere else)
     void UpdateQuickStart(uint32_t now)
@@ -1839,6 +1877,12 @@ namespace
             LOG_WARN("Lab: crashing on purpose");
             *reinterpret_cast<volatile int*>(0x10) = 1;
             return "";
+        }
+        if (line == "freezetest")  // lab: the game stops for 10 s, to see what the freeze watch logs
+        {
+            LOG_WARN("Lab: stopping the game for 10 s on purpose");
+            Sleep(10000);
+            return "stopped 10 s";
         }
         if (line == "modfix cancel")  // lab: Cancel on the download's box
         {
@@ -2210,6 +2254,7 @@ namespace
         }
         g_partClock.Done(kPartPlayer);
         UpdateThreats(now, me);
+        UpdateFighting(now);
         // The field of view (MCM): after every load and whenever it's changed; 0 puts the game's back (once).
         static int s_fovSet = 0;
         if (g_fovAfterLoad || g_config.fieldOfView != s_fovSet)
@@ -2595,6 +2640,7 @@ namespace
             break;
         }
         case NVSEMessagingInterface::kMessage_MainGameLoop:
+            FreezeBeat(g_coop.InGame() && g_worldLoaded && !g_loadingSave);
             EveryFrame();
             break;
         case NVSEMessagingInterface::kMessage_PreLoadGame:

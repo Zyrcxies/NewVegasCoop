@@ -351,6 +351,9 @@ namespace game
     // mines placed in the world (the host's NPCs set off the host's; ours are copies). Every frame (the mines' check
     // reads these as it goes). False if the hook couldn't go in.
     bool SetMineRules(TESObjectREFR* const* puppets, size_t count, bool friendGame);
+    // The level-up screen waits as if our player were in combat while `fighting` (a friend's game: the host says
+    // enemies are going for our character). Every frame. False if the hook couldn't go in.
+    bool HoldLevelUp(bool fighting);
     // What the player's container screen shows (box or body), or while trading the merchant's container; or null.
     TESObjectREFR* OpenContainer();
     // A kind of item (base form id, condition percent or net::kNoCondition, weapon mods) and how many.

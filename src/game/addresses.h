@@ -307,6 +307,12 @@ namespace game::addr
     // flag. Not quietly: also the disarm sound, the XP and the "mines disarmed" stat (for `actor`). Confirmed in game
     // (lab 2026-10-19: the laptop's disarmed mine 001743AF read disarmed on the host after this).
     constexpr uintptr_t kProjectileTurnOff = 0x009C43E0;
+    // How many actors are in combat with the player: thiscall(PlayerCharacter), 0 without its combatActors (+0xD64,
+    // JIP GameObjects.h PlayerCharacter::combatActors) (Ghidra FUN_00953C20). The HUD's level-up handling
+    // (FUN_0077C4E0) calls it at these two places and holds the level-up text and screen while it's above 0
+    // (3-player session, 2026-10-27: friends' level-up screens opened mid-fight: their enemies are our copies).
+    constexpr uintptr_t kPlayerCombatCount = 0x00953C20;
+    constexpr uintptr_t kLevelUpCombatCalls[] = {0x0077C58C, 0x0077D6BE};
 }
 
 // ActorMover: each actor's "legs" (Actor::actorMover, Actor +0x190). It holds the movement flags (coop::moves)

@@ -106,6 +106,7 @@ namespace coop
         net::DesyncReport desyncs;                     // what their game last said it disagrees with ours on
         ChatLimiter chatLimit;                         // their chat lines (a spam limit)
         VoiceLimiter voiceLimit;                       // their voice (a spam limit)
+        bool fighting = false;                         // enemies are going for their character (as we told them)
         uint32_t playerHitsSince = 0, playerHits = 0;  // their hits on players in this second (friendly fire)
         uint32_t lastAsk = 0;      // tick count of their last ask for a piece (or of our ModsDiffer)
     };
@@ -206,6 +207,10 @@ namespace coop
         // A mine placed in the world was disarmed, is gone or blew up here (net::kMine...): tell the others (a friend:
         // the host, who passes it on). TakeMines: the others' (made the same here; whose: the host's 0 on a friend).
         void ReportMine(uint32_t ref, uint8_t state);
+        // Host: whether enemies are going for this friend's character (sent to them when it changes). Friend: what
+        // the host last said about ours.
+        void SetFighting(uint8_t playerId, bool fighting);
+        bool HostSaysFighting() const { return m_hostSaysFighting; }
         struct MineFrom { uint8_t playerId; net::MineChange change; };
         std::vector<MineFrom> TakeMines() { return std::move(m_mines); }
         // Host: friends' hits since the last call.
@@ -497,6 +502,7 @@ namespace coop
         bool m_healthToSend = false;
         uint32_t m_lastHealthSent = 0;
         float m_damage = 0;
+        bool m_hostSaysFighting = false;                  // friend: enemies are going for our character
         SaveMode m_mode;  // the session's (the host's save's)
         bool m_revived = false;
         bool m_gameOver = false;

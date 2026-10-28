@@ -1266,6 +1266,22 @@ namespace net
             r.AtEnd();
     }
 
+    Bytes Encode(const Fighting& m)
+    {
+        Writer w(MsgType::Fighting);
+        w.U8(m.fighting ? 1 : 0);
+        return w.Take();
+    }
+
+    bool Decode(Reader& r, Fighting& m)
+    {
+        uint8_t on;
+        if (!r.U8(on) || on > 1 || !r.AtEnd())
+            return false;
+        m.fighting = on != 0;
+        return true;
+    }
+
     Bytes Encode(const MineChange& m)
     {
         Writer w(MsgType::MineChange);
