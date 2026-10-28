@@ -1546,6 +1546,29 @@ TEST(friend_container_waits_for_the_host_to_see_its_changes)
     CHECK(box.Look(put, changes).size() == 0);
 }
 
+TEST(friend_container_is_matched_while_only_aimed_at)
+{
+    // 2026-10-28 session: our own random loot showed, then turned into the host's. Now matched before it opens.
+    coop::FriendContainer box;
+    std::vector<ContainerChange> changes;
+    const std::vector<ItemCount> ours{{0x103B1B, 5}};
+    CHECK(box.View(0x1062A9, false));
+    CHECK(box.Look(ours, changes).empty());
+    box.Heard({0x1062A9, 0, {{0x15169, 3}}});
+    auto fixes = box.Look(ours, changes);
+    CHECK(fixes.size() == 2 && changes.empty());
+    const std::vector<ItemCount> matched{{0x15169, 3}};
+    box.Settle(matched);
+    // Something else changed it while only aimed at (not our player): not sent as a take.
+    const std::vector<ItemCount> other{{0x15169, 2}};
+    CHECK(box.Look(other, changes).empty() && changes.empty());
+    // Opened: the same box (nothing to tell the host), and our takes now count.
+    CHECK(!box.View(0x1062A9, true));
+    const std::vector<ItemCount> took{{0x15169, 1}};
+    box.Look(took, changes);
+    CHECK((changes.size() == 1 && changes[0].change == ItemCount{0x15169, -1}));
+}
+
 TEST(container_changes_reach_the_host_and_contents_reach_the_friend)
 {
     coop::Coop host, buddy;
@@ -4463,6 +4486,52 @@ TEST(friend_items_dont_bring_back_what_the_host_just_took)
 
 // Level-up screens wait out fights for friends too (3-player session, 2026-10-27: they opened mid-fight, since a
 // friend's game's enemies are copies that fight nobody): the host says when enemies are going for a friend's character.
+TEST(a_friends_own_reputation_changes_reach_the_host)
+{
+    // Two-PC lab, 2026-10-28: a friend's murder of a Goodsprings Settler changed their reputation, then the host's
+    // (unchanged) was set back over it.
+    coop::ReputationWatcher w;
+    float fame = 0, infamy = 0;
+    CHECK(!w.Look(0x104C22, 15, 0, fame, infamy));  // not heard from the host yet: not ours to judge
+    w.Heard(0x104C22, 0, 0);
+    CHECK(!w.Look(0x104C22, 0, 0, fame, infamy));
+    CHECK(w.Look(0x104C22, 15, 0, fame, infamy) && fame == 15 && infamy == 0);
+    CHECK(!w.Look(0x104C22, 15, 0, fame, infamy));  // told once
+    w.Heard(0x104C22, 15, 0);                       // the host has it now
+    CHECK(!w.Look(0x104C22, 15, 0, fame, infamy));
+    w.Forget();
+    CHECK(!w.Look(0x104C22, 30, 0, fame, infamy));
+
+    MsgType t;
+    std::vector<net::ReputationGain> got;
+    Bytes b = net::EncodeGains({{0x104C22, -5, 15}});
+    Reader r(b);
+    CHECK(r.Type(t) && t == MsgType::ReputationGain && net::DecodeGains(r, got) && got.size() == 1 &&
+        got[0] == (net::ReputationGain{0x104C22, -5, 15}));
+    Bytes none = net::EncodeGains({{0x104C22, 0, 0}});  // no change
+    Reader rn(none);
+    CHECK(rn.Type(t) && !net::DecodeGains(rn, got));
+    Bytes huge = net::EncodeGains({{0x104C22, 1e9f, 0}});
+    Reader rh(huge);
+    CHECK(rh.Type(t) && !net::DecodeGains(rh, got));
+    Bytes nan = net::EncodeGains({{0x104C22, std::nanf(""), 0}});
+    Reader rq(nan);
+    CHECK(rq.Type(t) && !net::DecodeGains(rq, got));
+
+    coop::Coop host, buddy;
+    CHECK(host.Host(kTestPort, "Host"));
+    CHECK(buddy.Join("127.0.0.1", kTestPort, "Buddy"));
+    CHECK((RunUntil({&host, &buddy}, [&] { return buddy.GetFriendState() == coop::FriendState::Joined; })));
+    buddy.ShareReputationGains({{0x104C22, 0, 15}});
+    std::vector<std::pair<uint8_t, net::ReputationGain>> heard;
+    CHECK((RunUntil({&host, &buddy}, [&] {
+        for (auto& g : host.TakeReputationGains())
+            heard.push_back(g);
+        return !heard.empty();
+    })));
+    CHECK((heard.size() == 1 && heard[0].second == net::ReputationGain{0x104C22, 0, 15}));
+}
+
 TEST(the_host_tells_friends_when_enemies_fight_them)
 {
     MsgType t;

@@ -18,7 +18,7 @@
 namespace net
 {
     // Bump whenever any message changes; players must match exactly.
-    constexpr uint32_t kProtocolVersion = 63;
+    constexpr uint32_t kProtocolVersion = 64;
     constexpr size_t kMaxNameLength = 32;
     constexpr size_t kMaxReasonLength = 200;
     constexpr size_t kMaxMessageSize = 64 * 1024;
@@ -90,6 +90,7 @@ namespace net
         PlayerLooks = 61,        // both ways: how a player's character looks (friend -> host: theirs; host -> friends: whose)
         NpcPile = 62,            // friend -> host: the host's NPC turned to goo or ash in my game (my energy weapon)
         Fighting = 64,           // host -> friend: enemies are fighting your character (or have stopped)
+        ReputationGain = 65,     // friend -> host: my game changed these reputations by itself (my kill, say)
         MineChange = 63,         // both ways: a mine placed in the world was disarmed, or is gone, in my game
                                  // (friend -> host: theirs; host -> friends: anyone's)
         ModsMatch = 48,          // host -> friend who only checks (at the main menu): your mods are mine; bye
@@ -540,6 +541,16 @@ namespace net
         bool operator==(const Reputation& o) const { return form == o.form && fame == o.fame && infamy == o.infamy; }
     };
     Bytes Encode(const std::vector<Reputation>& m);  // sends at most kMaxReputationsPerMessage
+    // What a friend's own game changed (two-PC lab, 2026-10-28: a friend murdered a Goodsprings Settler, their game
+    // said "Vilified", then the host's reputation, unchanged, was set back over it). Changes, so may be negative.
+    struct ReputationGain
+    {
+        uint32_t form = 0;
+        float fame = 0, infamy = 0;  // -kMaxReputation to kMaxReputation, not both 0
+        bool operator==(const ReputationGain& o) const { return form == o.form && fame == o.fame && infamy == o.infamy; }
+    };
+    Bytes EncodeGains(const std::vector<ReputationGain>& m);  // sends at most kMaxReputationsPerMessage
+    bool DecodeGains(Reader& r, std::vector<ReputationGain>& m);  // fails on none, too many, a bad form or value
     bool Decode(Reader& r, std::vector<Reputation>& m);  // fails on none, too many, a bad form or value
     // Conversations (step 7.4).
     struct TalkState

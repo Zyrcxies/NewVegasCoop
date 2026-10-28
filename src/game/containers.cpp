@@ -144,9 +144,13 @@ namespace game
 
     void Containers::FriendLook(coop::Coop& coop, const Npcs& npcs)
     {
+        // The one open, or else the one we aim at (matched before it opens).
         TESObjectREFR* open = OpenContainer();
+        bool isOpen = open != nullptr;
+        if (!open)
+            open = CrosshairRef();
         uint32_t hostRef = open && IsLootable(open) ? npcs.HostRefOf(RefId(open)) : 0;
-        coop.ViewContainer(hostRef);
+        coop.ViewContainer(hostRef, isOpen);
         if (!hostRef)
             return;
         std::vector<net::ItemCount> local;

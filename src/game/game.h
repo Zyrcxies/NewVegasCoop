@@ -356,6 +356,7 @@ namespace game
     bool HoldLevelUp(bool fighting);
     // What the player's container screen shows (box or body), or while trading the merchant's container; or null.
     TESObjectREFR* OpenContainer();
+    TESObjectREFR* CrosshairRef();  // what our player aims at, close enough to use (xNVSE GetCrosshairRef); or null
     // A kind of item (base form id, condition percent or net::kNoCondition, weapon mods) and how many.
     struct Item { uint32_t id; int32_t count; uint8_t health = net::kNoCondition; uint8_t mods = 0; };
     constexpr size_t kMaxItemKinds = 500;

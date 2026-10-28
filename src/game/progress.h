@@ -16,13 +16,14 @@ namespace game
     {
     public:
         void Update(coop::Coop& coop, uint32_t now);  // every frame
-        void Forget() { m_watcher.Forget(); }         // a save is loading
+        void Forget() { m_watcher.Forget(); m_reputationWatcher.Forget(); }  // a save is loading
         // Our player just gained this in a way that mustn't be shared as usual (a conversation's line: step 7.4).
         void Expect(int32_t xp, int32_t karma) { m_watcher.Expect(xp, karma); }
 
     private:
         void Reputations(coop::Coop& coop, uint32_t now, bool host);
         coop::ProgressWatcher m_watcher;
+        coop::ReputationWatcher m_reputationWatcher;  // friend: our own game's reputation changes
         uint32_t m_nextLook = 0, m_nextReputationLook = 0, m_nextReputationResend = 0;
         std::map<uint32_t, std::pair<float, float>> m_sentReputations;  // host: as last sent, by form
         uint32_t m_joins = 0;
@@ -30,6 +31,6 @@ namespace game
         bool m_wasInGame = false;
         // Logged now and then (CLAUDE.md: measure).
         int32_t m_sharedXp = 0, m_gotXp = 0;
-        uint32_t m_reputationsSet = 0, m_nextLog = 0;
+        uint32_t m_reputationsSet = 0, m_reputationsShared = 0, m_nextLog = 0;
     };
 }

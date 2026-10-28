@@ -639,8 +639,9 @@ namespace game::layout
     constexpr uint32_t kQuestScript = 0x1C;
     // Reputations (step 7.2; JIP GameData.h / GameForms.h): DataHandler +0x90 tList<TESReputation>; TESReputation
     // +0x1C its name (TESFullName at +0x18), and two floats JIP calls positiveRep (+0x44) and negativeRep (+0x48).
-    // Confirmed in game the other way round (two-PC lab, 2026-10-15: AddReputationExact RepNVNovac 0 10, fame,
-    // changed +0x48, and GetReputation ... 0 read it back): fame is +0x48, infamy +0x44.
+    // As JIP has them: fame +0x44, infamy +0x48. (Two-PC lab, 2026-10-15: AddReputationExact RepNVNovac 0 10 changed
+    // +0x48, so index 0 is infamy. Two-PC lab, 2026-10-28: a friend murdered a Goodsprings Settler, +0x48 went 0 to
+    // 15 and the game said "Goodsprings: Vilified", an infamy rank.)
     constexpr uint32_t kDataHandlerReputations = 0x90;
     // Loaded mods (step 8.6; xNVSE GameData.h): DataHandler +0x210 ModList, its loadedModCount at +0x218 and
     // ModInfo* loadedMods[0xFF] at +0x21C (in load order); a ModInfo's (TESFile's) file name, char[0x104], at +0x20.
@@ -650,8 +651,8 @@ namespace game::layout
     constexpr uint32_t kDataHandlerMods = 0x21C;
     constexpr uint32_t kModFileName = 0x20;
     constexpr uint32_t kReputationName = 0x1C;
-    constexpr uint32_t kReputationFame = 0x48;
-    constexpr uint32_t kReputationInfamy = 0x44;
+    constexpr uint32_t kReputationFame = 0x44;
+    constexpr uint32_t kReputationInfamy = 0x48;
     // TESQuest +0x30 TESFullName, whose +0x04 is the name (String); BGSQuestObjective +0x08: its text (String).
     // (JIP GameForms.h.) Not yet confirmed in game.
     constexpr uint32_t kQuestName = 0x34;

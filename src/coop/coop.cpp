@@ -132,6 +132,7 @@ namespace coop
         m_refEnables.clear();
         m_progress.clear();
         m_reputations.clear();
+        m_repGains.clear();
         m_talk.Clear();
         m_wait = WaitVote{};
         m_waitEvents.clear();
@@ -434,6 +435,15 @@ namespace coop
             RemotePlayer& remote = m_remotes[player.id];
             remote.health = m.health;
             remote.maxHealth = m.maxHealth;
+            return;
+        }
+
+        if (type == MsgType::ReputationGain)
+        {
+            std::vector<ReputationGain> m;
+            if (DecodeGains(r, m) && m_repGains.size() + m.size() <= kMaxQueuedQuests)
+                for (const ReputationGain& g : m)
+                    m_repGains.push_back({player.id, g});
             return;
         }
 
@@ -2321,9 +2331,9 @@ namespace coop
             m_net->Send(peer->first, EncodeItemRefund(refund), true);
     }
 
-    void Coop::ViewContainer(uint32_t hostRef)
+    void Coop::ViewContainer(uint32_t hostRef, bool open)
     {
-        if (m_role == Role::Friend && InGame() && m_friendContainer.View(hostRef))
+        if (m_role == Role::Friend && InGame() && m_friendContainer.View(hostRef, open))
             m_net->Send(1, EncodeContainerView(hostRef), true);
     }
 
@@ -2511,6 +2521,16 @@ namespace coop
                 reps.begin() + (i + kMaxReputationsPerMessage < reps.size() ? i + kMaxReputationsPerMessage : reps.size()));
             SendToJoined(Encode(part), true);
         }
+    }
+
+    void Coop::ShareReputationGains(const std::vector<ReputationGain>& gains)
+    {
+        if (m_role != Role::Friend || !InGame())
+            return;
+        for (size_t i = 0; i < gains.size(); i += kMaxReputationsPerMessage)
+            m_net->Send(1, EncodeGains(std::vector<ReputationGain>(gains.begin() + i,
+                gains.begin() + (i + kMaxReputationsPerMessage < gains.size() ? i + kMaxReputationsPerMessage :
+                gains.size()))), true);
     }
 
     void Coop::ShareProgressFor(uint8_t playerId, int32_t xp, int32_t karma)

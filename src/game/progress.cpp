@@ -4,6 +4,7 @@
 #include "game/game.h"
 #include "log.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -25,6 +26,7 @@ namespace game
             {
                 m_watcher.Forget();
                 m_sentReputations.clear();
+                m_reputationWatcher.Forget();
                 m_joins = 0;
             }
             m_wasInGame = false;
@@ -101,6 +103,22 @@ namespace game
             if (all)
                 m_nextReputationResend = now + kReputationResendMs;
             m_joins = coop.Joins();
+            // Friends' own changes: ours (then sent to everyone below, as changed).
+            for (const auto& [playerId, g] : coop.TakeReputationGains())
+                for (const ReputationInfo& r : ReadReputations())
+                    if (r.form == g.form)
+                    {
+                        float fame = std::clamp(r.fame + g.fame, 0.0f, net::kMaxReputation);
+                        float infamy = std::clamp(r.infamy + g.infamy, 0.0f, net::kMaxReputation);
+                        WriteReputation(r.form, fame, infamy);
+                        LOG_INFO("Progress: %s's game changed reputation %08X %s (fame %+.0f, infamy %+.0f); so does "
+                            "ours", coop.NameOf(playerId).c_str(), r.form, r.name.c_str(), g.fame, g.infamy);
+                        // (Their game showed its own message; the other friends get theirs when they hear ours.)
+                        if (!r.name.empty() && g.fame > 0)
+                            Notify(("Fame gained with " + r.name).c_str());
+                        if (!r.name.empty() && g.infamy > 0)
+                            Notify(("Infamy gained with " + r.name).c_str());
+                    }
             std::vector<net::Reputation> send;
             for (const ReputationInfo& r : ReadReputations())
             {
@@ -117,10 +135,30 @@ namespace game
             return;
         }
         std::vector<net::Reputation> heard = coop.TakeReputations();
-        if (heard.empty())
+        bool look = coop::IsDue(now, m_nextReputationLook);
+        if (heard.empty() && !look)
             return;
+        if (look)
+            m_nextReputationLook = now + kReputationLookMs;
         bool quiet = !coop::IsDue(now, m_quietUntil);
         std::vector<ReputationInfo> mine = ReadReputations();
+        // Our own game's changes first (before the host's are set over them): to the host.
+        std::vector<net::ReputationGain> gains;
+        for (const ReputationInfo& r : mine)
+        {
+            net::ReputationGain g{r.form};
+            if (m_reputationWatcher.Look(r.form, r.fame, r.infamy, g.fame, g.infamy))
+            {
+                gains.push_back(g);
+                ++m_reputationsShared;
+                LOG_INFO("Progress: our game changed reputation %08X %s (fame %+.0f, infamy %+.0f); told the host",
+                    r.form, r.name.c_str(), g.fame, g.infamy);
+            }
+        }
+        if (!gains.empty())
+            coop.ShareReputationGains(gains);
+        for (const net::Reputation& h : heard)
+            m_reputationWatcher.Heard(h.form, h.fame, h.infamy);
         for (const net::Reputation& h : heard)
         {
             for (const ReputationInfo& r : mine)

@@ -4,6 +4,8 @@
 // because another player gained it (which mustn't be passed on again). Game-independent: tested in tests/.
 
 #include <cstdint>
+#include <map>
+#include <utility>
 
 namespace coop
 {
@@ -51,5 +53,29 @@ namespace coop
         bool m_started = false;
         int32_t m_xp = 0, m_karma = 0;
         int32_t m_expectXp = 0, m_expectKarma = 0;
+    };
+
+    // Friend: faction reputations are the host's (set to theirs), but our own game changes them too, by itself (our
+    // murder: two-PC lab, 2026-10-28). Those changes go to the host. Only reputations the host has told us about.
+    class ReputationWatcher
+    {
+    public:
+        // The host's (we set ours to it).
+        void Heard(uint32_t form, float fame, float infamy) { m_known[form] = {fame, infamy}; }
+        // Ours now: true, with the change, if our game changed it since.
+        bool Look(uint32_t form, float fame, float infamy, float& fameChange, float& infamyChange)
+        {
+            auto it = m_known.find(form);
+            if (it == m_known.end() || (it->second.first == fame && it->second.second == infamy))
+                return false;
+            fameChange = fame - it->second.first;
+            infamyChange = infamy - it->second.second;
+            it->second = {fame, infamy};
+            return true;
+        }
+        void Forget() { m_known.clear(); }  // a save is loading
+
+    private:
+        std::map<uint32_t, std::pair<float, float>> m_known;
     };
 }

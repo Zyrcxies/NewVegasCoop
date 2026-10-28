@@ -911,6 +911,34 @@ namespace net
         return r.AtEnd();
     }
 
+    Bytes EncodeGains(const std::vector<ReputationGain>& m)
+    {
+        Writer w(MsgType::ReputationGain);
+        size_t count = m.size() < kMaxReputationsPerMessage ? m.size() : kMaxReputationsPerMessage;
+        w.U8(static_cast<uint8_t>(count));
+        for (size_t i = 0; i < count; ++i)
+        {
+            w.U32(m[i].form);
+            w.F32(m[i].fame);
+            w.F32(m[i].infamy);
+        }
+        return w.Take();
+    }
+
+    bool DecodeGains(Reader& r, std::vector<ReputationGain>& m)
+    {
+        uint8_t count;
+        if (!r.U8(count) || count == 0 || count > kMaxReputationsPerMessage)
+            return false;
+        m.resize(count);
+        for (ReputationGain& g : m)
+            if (!r.U32(g.form) || !IsSharedRef(g.form) || IsMadeWhilePlaying(g.form) || !r.F32(g.fame) ||
+                !r.F32(g.infamy) || !(g.fame >= -kMaxReputation && g.fame <= kMaxReputation) ||
+                !(g.infamy >= -kMaxReputation && g.infamy <= kMaxReputation) || (g.fame == 0 && g.infamy == 0))
+                return false;
+        return r.AtEnd();
+    }
+
     Bytes Encode(const TalkState& m)
     {
         Writer w(MsgType::TalkState);

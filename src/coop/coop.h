@@ -314,7 +314,7 @@ namespace coop
         // because it couldn't happen in our world (someone took it first, say).
         void ContainerChangeDone(uint8_t playerId, uint32_t seq, const net::ItemCount& refund);
         // Friend: our player opened this container or body (the host's id; 0: closed it).
-        void ViewContainer(uint32_t hostRef);
+        void ViewContainer(uint32_t hostRef, bool open = true);
         // Friend: what it holds in our game now; call a few times a second while it's open. Our player's takes
         // and puts go to the host. Returns what to change in ours to match the host's; then call ContainerSettled.
         std::vector<net::ItemCount> LookAtContainer(const std::vector<net::ItemCount>& local);
@@ -365,6 +365,10 @@ namespace coop
         std::vector<net::Progress> TakeProgress() { return std::move(m_progress); }
         // Host: faction reputations as we have them (changed ones, or all); they go to every friend.
         void SendReputations(const std::vector<net::Reputation>& reps);
+        // Friend: reputation changes our own game made (to the host, whose reputations are everyone's).
+        void ShareReputationGains(const std::vector<net::ReputationGain>& gains);
+        // Host: friends' reputation changes (player id, change) heard since the last call.
+        std::vector<std::pair<uint8_t, net::ReputationGain>> TakeReputationGains() { return std::move(m_repGains); }
         // Friend: the host's reputations heard since the last call.
         std::vector<net::Reputation> TakeReputations() { return std::move(m_reputations); }
         // Host: another player's gain that our game also made (it ran their conversation's line): everyone but them
@@ -620,6 +624,7 @@ namespace coop
         std::vector<net::RefEnable> m_refEnables;         // friend: not taken yet
         std::vector<net::Progress> m_progress;            // others' gains, not taken yet
         std::vector<net::Reputation> m_reputations;       // friend: not taken yet
+        std::vector<std::pair<uint8_t, net::ReputationGain>> m_repGains;  // host: friends', not taken yet
         TalkLock m_talk;                                  // host: decides; friend: as the host last said
         void SendTalk(net::PeerId to);                    // host: who is talking, to one friend (0: all)
         std::vector<DialogueLineFrom> m_dialogueLines;    // host: not taken yet

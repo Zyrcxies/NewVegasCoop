@@ -18,8 +18,11 @@ namespace coop
     class FriendContainer
     {
     public:
-        // Our player opened `ref` (the host's id for it; 0: closed it). True if that's a change (tell the host).
-        bool View(uint32_t ref);
+        // Our player opened `ref` (the host's id for it; 0: closed it), or only aims at it (`open` false): matched to
+        // the host's already, so the box shows the host's items when it opens instead of our own random loot changing
+        // into them (2026-10-28 session: items in every box turned into others after a moment). True if `ref` is a
+        // change (tell the host).
+        bool View(uint32_t ref, bool open = true);
         uint32_t Viewing() const { return m_ref; }
         // What it holds in our game now; call a few times a second while it's open. Our player's takes and puts
         // since the last look go in `changes` (to send). Returns what to add to or take out of ours to match the
@@ -32,6 +35,7 @@ namespace coop
 
     private:
         uint32_t m_ref = 0;
+        bool m_open = false;  // its screen is open (only then are changes our player's takes and puts)
         uint32_t m_seq = 0;  // our changes sent so far (all containers)
         bool m_hasSnapshot = false;
         std::vector<net::ItemCount> m_snapshot;  // ours at the last look

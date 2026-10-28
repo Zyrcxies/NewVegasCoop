@@ -182,6 +182,7 @@ namespace game
         Script* g_grabbed = nullptr;  // (step 8.9: what our player carries)
         Script* g_followers = nullptr;  // (companions)
         Script* g_isTeammate = nullptr;
+        Script* g_crosshair = nullptr;
         Script* g_limbsGone = nullptr;
         NVSECommandTableInterface* g_cmdTable = nullptr;
         Script* g_pcAddItem = nullptr;
@@ -1274,6 +1275,10 @@ namespace game
             "    loop\n"
             "  endif\n"
             "  SetFunctionValue aOut\n"
+            "End\n");
+        g_crosshair = Compile("crosshair ref",
+            "Begin Function {}\n"
+            "  SetFunctionValue GetCrosshairRef\n"  // (as the lab's eval does: "set rAt to" it didn't compile)
             "End\n");
         g_isTeammate = Compile("is teammate",
             "Begin Function {}\n"
@@ -4501,6 +4506,15 @@ namespace game
         const void* extra = reinterpret_cast<GetByTypeFn>(addr::kExtraListGetByType)(&merchant->extraDataList,
             layout::kExtraMerchantContainer);
         return extra ? At<TESObjectREFR*>(extra, layout::kMerchantContainerRef) : nullptr;
+    }
+
+    TESObjectREFR* CrosshairRef()
+    {
+        NVSEArrayVarInterface::Element result;
+        if (!g_crosshair || !Player() || !g_scripts->CallFunction(g_crosshair, Player(), nullptr, &result, 0))
+            return nullptr;
+        TESForm* at = result.GetTESForm();
+        return at ? LookupRef(at->refID) : nullptr;
     }
 
     bool Contents(TESObjectREFR* ref, std::vector<Item>& out)

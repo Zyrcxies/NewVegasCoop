@@ -21,8 +21,9 @@ namespace coop
         return out;
     }
 
-    bool FriendContainer::View(uint32_t ref)
+    bool FriendContainer::View(uint32_t ref, bool open)
     {
+        m_open = ref && open;
         if (ref == m_ref)
             return false;
         m_ref = ref;
@@ -36,7 +37,8 @@ namespace coop
     {
         if (!m_ref)
             return {};
-        if (m_hasSnapshot)
+        // (Only aimed at: anything that changed it wasn't our player.)
+        if (m_hasSnapshot && m_open)
             for (const net::ItemCount& d : ItemDiff(m_snapshot, local))
                 changes.push_back({m_ref, ++m_seq, d});  // it gained: put in; it lost: taken out
         m_snapshot = local;
