@@ -35,6 +35,15 @@ namespace game::addr
     // BSExtraData* (__thiscall BaseExtraList::*)(UInt8 type): a ref's extra data of one type, or null. xNVSE
     // GameBSExtraData.h GetByType; ends "ret 4" (one argument, checked).
     constexpr uintptr_t kExtraListGetByType = 0x00410220;
+    // The player's compass targets (PlayerCharacter +0xD48 tList<CompassTarget>: actor, +4 hostile, +5; JIP
+    // GameObjects.h). Ghidra: 0x966F20 adds or updates one, thiscall(PlayerCharacter*, Actor*, UInt8 hostile, UInt8
+    // hidden), RET 0xC (the game's detection, 0x96C330, calls it (actor, hostile, 0) for actors the player detects and
+    // (actor, hostile, 1) for ones it lost sight of); 0x967350 removes one, thiscall(PlayerCharacter*, Actor*), RET 4,
+    // comparing the pointer only (the actor's destructor, 0x87DCB0, calls it too). The HUD's compass (0x779070) draws
+    // the entries whose +5 is 0, within the sneak distance: a tick, red if hostile. Confirmed in game (2026-10-30
+    // two-PC lab: the laptop's character 1,500 units away showed as a tick; removed cleanly when the laptop left).
+    constexpr uintptr_t kCompassTargetSet = 0x00966F20;
+    constexpr uintptr_t kCompassTargetRemove = 0x00967350;
     // ContainerMenu* while the container screen is open, null otherwise (JIP GameUI.h ContainerMenu::Get).
     // Confirmed in game (coop box, 2026-10-14).
     constexpr uintptr_t kContainerMenu = 0x011D93F8;
@@ -362,9 +371,40 @@ namespace game::process
     // 0x00ACBB70 returns null: far-away actors aren't animated).
     constexpr uint32_t kGetAnimDataOffset = 0x1B8;
     constexpr uint32_t kLevel = 0x28;  // 0 high (nearby, fully simulated), 1 middle-high, 2 middle-low, 3 low
+    // BaseProcess +0x2C CachedValues*: +0x38 walk speed, +0x3C run speed (floats), +0x44 flags (0x1000 walk speed
+    // cached, 0x2000 run speed cached; JIP's SetSpeedMult clears both). JIP GameProcess.h. Confirmed in game
+    // (2026-10-30: the player's run 338.8 units/s, 609.8 in Enhanced Movement's sprint, 277.2 with a rifle out).
+    constexpr uint32_t kCachedValues = 0x2C;
+    constexpr uint32_t kCachedWalkSpeed = 0x38;
+    constexpr uint32_t kCachedRunSpeed = 0x3C;
+    constexpr uint32_t kCachedFlags = 0x44;
     // AnimData fields.
     constexpr uint32_t kAnimActor = 0x04;     // Actor* it belongs to
     constexpr uint32_t kAnimGroupIds = 0x4C;  // UInt16[8]: group playing in each animation layer
+    // AnimData +0x124 AnimIdle*: the idle animation playing; AnimIdle +0x2C its TESIdleForm*, +0x34 its Actor* (JIP
+    // GameProcess.h / GameTasks.h, kNVSE GameProcess.h agree). Read by the inspector only; none while the player sits
+    // in a chair (sitting lab, 2026-10-30: a chair plays a file, below, not an idle form).
+    constexpr uint32_t kAnimIdle = 0x124;
+    constexpr uint32_t kIdleForm = 0x2C;
+    constexpr uint32_t kIdleActor = 0x34;
+    // AnimData +0xE0 BSAnimGroupSequence*[8], one per layer; NiControllerSequence +0x08 its name (const char*, the
+    // animation file). JIP GameProcess.h / netimmerse.h. Confirmed in game (2026-10-30: the seated player's layer 0
+    // played Meshes\Characters\_Male\IdleAnims\DynamicIdle_ChairSit.kf).
+    constexpr uint32_t kAnimSequences = 0xE0;
+    constexpr uint32_t kSequenceName = 0x08;
+    // AnimData +0xD8 its NiControllerManager (JIP GameProcess.h controllerMngr, kNVSE agrees); the manager's +0x34
+    // NiTArray of NiControllerSequence* (data at +0x38, slots in use, UInt16, at +0x3E; JIP netimmerse.h /
+    // Ni_types.h); a sequence's +0x44 state (0 not playing) and function +0x8C Deactivate(float easeOut, UInt8
+    // transition), RET 8 (BSAnimGroupSequence 0x4EFDC0, NiControllerSequence 0xA35030 in Ghidra). Confirmed in game
+    // (2026-10-30 two-PC lab: a friend standing up ended their character's chair animation; found playing or not).
+    constexpr uint32_t kAnimController = 0xD8;
+    constexpr uint32_t kControllerSequences = 0x38;
+    constexpr uint32_t kControllerSequenceSlots = 0x3E;
+    constexpr uint32_t kSequenceState = 0x44;
+    // UInt32: 0 loop, 1 reverse, 2 clamp (once: JIP netimmerse.h kCycle_*). Confirmed in game (2026-10-30: the
+    // 7.5 s downed animation, set to 0, played 16 s with no restart).
+    constexpr uint32_t kSequenceCycle = 0x24;
+    constexpr uint32_t kSequenceDeactivate = 0x8C;
     constexpr int kAnimLayers = 8;
     // ProcessManager fields (see addr::kProcessManager).
     constexpr uint32_t kManagerObjects = 0x08;      // MobileObject** : the list (NiTArray +0x04)
@@ -610,6 +650,23 @@ namespace game::layout
     // in game (coop items: 24 rounds of ammo, a dropped stack of 2). After a pick-up it reads 1.
     constexpr uint8_t kExtraCount = 0x24;
     constexpr uint32_t kCountValue = 0x0C;
+    // ExtraMapMarker (extra data type 0x2C, JIP GameExtraData.h; xNVSE agrees): +0x0C MarkerData*. MarkerData: +0x00
+    // TESFullName (its String's char* at +0x04), +0x0C flags (UInt8: 1 shown on the map, 2 can fast travel there, 4
+    // hidden). Map markers are found as JIP's GetLoadedTypeArray 301
+    // finds them (JIP GameData.h / GameForms.h): DataHandler +0x10 tList<TESWorldSpace>, TESWorldSpace +0x34 its
+    // persistent cell (may be null: JIP's own walk crashed on one), TESObjectCELL +0xAC its refs (tList).
+    constexpr uint32_t kDataHandlerWorldSpaces = 0x10;
+    constexpr uint32_t kWorldSpaceCell = 0x34;
+    constexpr uint32_t kCellObjects = 0xAC;
+    // PlayerCharacter +0x680 disabledControlFlags (UInt8: 1 movement, 2 looking, 4 Pip-Boy, 8 fighting, 0x10 view,
+    // 0x20 rollover text, 0x40 sneaking), as DisablePlayerControls sets them. kNVSE and TES Reloaded GameObjects.h.
+    // Confirmed in game (2026-10-30: DisablePlayerControls made it 0D, EnablePlayerControls 00; a conversation left it 0).
+    constexpr uint32_t kPlayerDisabledControls = 0x680;
+    constexpr uint8_t kExtraMapMarker = 0x2C;
+    constexpr uint32_t kMapMarkerData = 0x0C;
+    constexpr uint32_t kMarkerName = 0x04;
+    constexpr uint32_t kMarkerFlags = 0x0C;
+    constexpr uint8_t kMarkerCanTravel = 2;  // confirmed in game (2026-10-30 two-PC lab: 320 markers found, 318 unlocked both ways)
     // Quests (JIP GameData.h / GameForms.h; step 7.1). DataHandler +0x118: tList<TESQuest> (first node inline:
     // data, next). TESQuest: +0x3C questFlags (1 running, 2 completed, 0x20 shown in the Pip-Boy, 0x40 failed),
     // +0x40 questDelayTime (float, seconds between its script's runs), +0x44 tList<StageInfo> (StageInfo: +0 stage,

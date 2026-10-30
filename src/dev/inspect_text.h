@@ -25,6 +25,10 @@ namespace dev
         int processLevel = -1;  // AI detail: 0 high (nearby) ... 3 low, -1 none
         bool animsKnown = false;
         uint16_t anims[kAnimLayers] = {};  // animation group in each layer
+        uint32_t idle = 0;                 // idle animation form it's playing (its animation data's), 0 none
+        float walkSpeed = 0, runSpeed = 0;  // its process's cached walk and run speed (0: not cached)
+        int lockedControls = -1;            // the player: controls a script locked (DisablePlayerControls flags)
+        std::string sequences[kAnimLayers];  // the animation file playing in each layer (its sequence's name)
 
         int action = -1;  // animation action (JIP LN AnimAction: 2 attack, 14 script animation...), -1 none
 

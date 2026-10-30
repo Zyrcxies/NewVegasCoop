@@ -38,7 +38,8 @@ namespace coop
         m_friendState = FriendState::Connecting;
         m_checkOnly = checkModsOnly;
         m_modsMatched = false;
-        LOG_INFO("%s %s:%u as %s", checkModsOnly ? "Comparing mods with" : "Joining", address.c_str(), port,
+        // (No address in the log: players post their logs publicly.)
+        LOG_INFO("%s the host by IP (port %u) as %s", checkModsOnly ? "Comparing mods with" : "Joining", port,
             myName.c_str());
         return true;
     }
@@ -132,6 +133,10 @@ namespace coop
         m_refEnables.clear();
         m_progress.clear();
         m_reputations.clear();
+        m_travelMarkers.clear();
+        m_teleports.clear();
+        m_anims.clear();
+        m_modAnims.clear();
         m_repGains.clear();
         m_talk.Clear();
         m_wait = WaitVote{};
@@ -263,6 +268,22 @@ namespace coop
             else
                 m_net->Send(1, Encode(mine));
         }
+        if (InGame() && !m_myModAnimsSent)
+        {
+            m_myModAnimsSent = true;
+            if (m_role == Role::Host)
+                SendToJoined(Encode(PlayerModAnims{kHostPlayerId, m_myModAnims}), true);
+            else
+                m_net->Send(1, Encode(PlayerModAnims{m_myId, m_myModAnims}));
+        }
+        if (InGame() && !m_myAnimSent)
+        {
+            m_myAnimSent = true;
+            if (m_role == Role::Host)
+                SendToJoined(Encode(PlayerAnim{kHostPlayerId, m_myAnim}), true);
+            else
+                m_net->Send(1, Encode(PlayerAnim{m_myId, m_myAnim}));
+        }
         SendMyPose(now);
         SendMyGear();
         SendMyHealth(now);
@@ -308,6 +329,53 @@ namespace coop
                 LOG_INFO("NPCs: the host is sharing %zu", m_npcs.size());
             }
         }
+    }
+
+    void Coop::SetMyAnim(const std::string& path)
+    {
+        if (path == m_myAnim || (!path.empty() && !IsAnimPath(path)))
+            return;
+        m_myAnim = path;
+        m_myAnimSent = false;
+    }
+
+    void Coop::HeardAnim(uint8_t player, const std::string& path)
+    {
+        auto it = m_anims.find(player);
+        if (path.empty() ? it == m_anims.end() : it != m_anims.end() && it->second == path)
+            return;
+        if (path.empty())
+            m_anims.erase(it);
+        else if (it != m_anims.end() || m_anims.size() < 8)
+            m_anims[player] = path;
+        else
+            return;
+        ++m_animChanges;
+        LOG_DEBUG("Animations: %s's character %s %s", NameOf(player).c_str(), path.empty() ? "stopped" : "plays",
+            path.c_str());
+    }
+
+    void Coop::SetMyModAnims(const std::vector<std::string>& paths)
+    {
+        std::vector<std::string> checked;
+        for (const std::string& path : paths)
+            if (IsAnimPath(path) && checked.size() < kMaxModAnims)
+                checked.push_back(path);
+        if (checked == m_myModAnims)
+            return;
+        m_myModAnims = std::move(checked);
+        m_myModAnimsSent = false;
+    }
+
+    void Coop::HeardModAnims(uint8_t player, const std::vector<std::string>& paths)
+    {
+        auto it = m_modAnims.find(player);
+        if (paths.empty() ? it == m_modAnims.end() : it != m_modAnims.end() && it->second == paths)
+            return;
+        if (paths.empty())
+            m_modAnims.erase(it);
+        else if (it != m_modAnims.end() || m_modAnims.size() < 8)
+            m_modAnims[player] = paths;
     }
 
     void Coop::SetMyLooks(const net::PlayerLooks& looks)
@@ -393,7 +461,8 @@ namespace coop
                 player.askId = m_nextAskId++;
                 player.askedAt = GetTickCount();
                 m_joinAsks.push_back({player.askId, hello.name, player.wantsFiles});
-                LOG_INFO("%s (%s) asks to join; asking the host", hello.name.c_str(), player.from.c_str());
+                LOG_INFO("%s (%s) asks to join; asking the host", hello.name.c_str(),
+                    player.from.rfind("steam:", 0) == 0 ? player.from.c_str() : "by IP");  // (no address in logs)
                 Writer w(MsgType::AskingHost);
                 m_net->Send(peer, w.Take());
                 return;
@@ -408,7 +477,8 @@ namespace coop
                 return;  // damaged: drop it
             state.playerId = player.id;  // they can only move themselves
             m_remotes[player.id].motion.Add(state.timeMs,
-                Pose{state.space, state.x, state.y, state.z, state.heading, state.flags, state.moves, state.pitch},
+                Pose{state.space, state.x, state.y, state.z, state.heading, state.flags, state.moves, state.pitch,
+                    state.runSpeed},
                 GetTickCount());
             SendToJoined(Encode(state), false, peer);
             return;
@@ -435,6 +505,28 @@ namespace coop
             RemotePlayer& remote = m_remotes[player.id];
             remote.health = m.health;
             remote.maxHealth = m.maxHealth;
+            return;
+        }
+
+        if (type == MsgType::TravelMarkers)
+        {
+            std::vector<uint32_t> m;
+            if (DecodeTravelMarkers(r, m) && m_travelMarkers.size() + m.size() <= kMaxQueuedMarkers)
+                m_travelMarkers.insert(m_travelMarkers.end(), m.begin(), m.end());
+            return;
+        }
+
+        if (type == MsgType::Teleport)
+        {
+            Teleport m;
+            // Only for themselves: they go somewhere, or bring someone to them.
+            if (Decode(r, m) && (m.mover == player.id || m.target == player.id) && IsPlayer(m.mover) &&
+                IsPlayer(m.target))
+            {
+                LOG_INFO("Teleporter: %s asks for %s to go to %s", player.name.c_str(), NameOf(m.mover).c_str(),
+                    NameOf(m.target).c_str());
+                AskTeleport(m.mover, m.target);
+            }
             return;
         }
 
@@ -594,6 +686,28 @@ namespace coop
             m.player = player.id;
             SendToJoined(Encode(m), false, peer);  // (on to the others)
             m_voice.push_back({player.id, std::move(m.data)});
+            return;
+        }
+
+        if (type == MsgType::PlayerModAnims)
+        {
+            net::PlayerModAnims m;
+            if (!player.joined || !Decode(r, m))
+                return;
+            m.player = player.id;
+            HeardModAnims(m.player, m.paths);
+            SendToJoined(Encode(m), true, peer);  // (on to the others)
+            return;
+        }
+
+        if (type == MsgType::PlayerAnim)
+        {
+            net::PlayerAnim m;
+            if (!player.joined || !Decode(r, m))
+                return;
+            m.player = player.id;
+            HeardAnim(m.player, m.path);
+            SendToJoined(Encode(m), true, peer);  // (on to the others)
             return;
         }
 
@@ -869,6 +983,8 @@ namespace coop
             m_hostXp = welcome.hostXp;
             m_hostXpWaiting = true;
             m_myLooksSent = false;  // (the host's game hears how we look)
+            m_myAnimSent = m_myAnim.empty();  // (and sees us sitting)
+            m_myModAnimsSent = m_myModAnims.empty();
             m_questMods = welcome.questMods;
             m_mode = welcome.mode;
             LOG_INFO("The host's save: %s", Describe(m_mode).c_str());
@@ -956,6 +1072,8 @@ namespace coop
                 return;
             LOG_INFO("%s left", it->second.name.c_str());
             m_looks.erase(it->first);
+            HeardAnim(it->first, "");
+            HeardModAnims(it->first, {});
             m_remotes.erase(it);
         }
         else if (type == MsgType::PlayerState)
@@ -965,7 +1083,8 @@ namespace coop
                 return;
             auto it = m_remotes.find(m.playerId);  // only players the host told us about
             if (it != m_remotes.end())
-                it->second.motion.Add(m.timeMs, Pose{m.space, m.x, m.y, m.z, m.heading, m.flags, m.moves, m.pitch},
+                it->second.motion.Add(m.timeMs, Pose{m.space, m.x, m.y, m.z, m.heading, m.flags, m.moves, m.pitch,
+                    m.runSpeed},
                     GetTickCount());
         }
         else if (type == MsgType::NpcStates)
@@ -1040,6 +1159,18 @@ namespace coop
             m_talk.Clear();
             if (m.talking)
                 m_talk.Report(m.playerId, true, m.npc);
+        }
+        else if (type == MsgType::Teleport)
+        {
+            Teleport m;
+            if (Decode(r, m) && m.mover == m_myId && IsPlayer(m.target) && m_teleports.size() < 8)
+                m_teleports.push_back(m.target);
+        }
+        else if (type == MsgType::TravelMarkers)
+        {
+            std::vector<uint32_t> m;
+            if (DecodeTravelMarkers(r, m) && m_travelMarkers.size() + m.size() <= kMaxQueuedMarkers)
+                m_travelMarkers.insert(m_travelMarkers.end(), m.begin(), m.end());
         }
         else if (type == MsgType::Reputations)
         {
@@ -1164,6 +1295,18 @@ namespace coop
             net::VoiceData m;
             if (Decode(r, m) && m.player != m_myId && m_voice.size() < 64)
                 m_voice.push_back({m.player, std::move(m.data)});
+        }
+        else if (type == MsgType::PlayerAnim)
+        {
+            net::PlayerAnim m;
+            if (Decode(r, m) && m.player != m_myId)
+                HeardAnim(m.player, m.path);
+        }
+        else if (type == MsgType::PlayerModAnims)
+        {
+            net::PlayerModAnims m;
+            if (Decode(r, m) && m.player != m_myId)
+                HeardModAnims(m.player, m.paths);
         }
         else if (type == MsgType::PlayerLooks)
         {
@@ -1718,6 +1861,14 @@ namespace coop
         }
         for (const auto& [id, looks] : m_looks)
             m_net->Send(peer, Encode(looks));
+        if (!m_myAnim.empty())
+            m_net->Send(peer, Encode(PlayerAnim{kHostPlayerId, m_myAnim}));
+        if (!m_myModAnims.empty())
+            m_net->Send(peer, Encode(PlayerModAnims{kHostPlayerId, m_myModAnims}));
+        for (const auto& [id, paths] : m_modAnims)
+            m_net->Send(peer, Encode(PlayerModAnims{id, paths}));
+        for (const auto& [id, path] : m_anims)
+            m_net->Send(peer, Encode(PlayerAnim{id, path}));
         m_lastPoseSent = 0;  // send our position to them right away
         m_sentNpcs.clear();  // and every NPC's
         SendTalk(peer);
@@ -1879,6 +2030,8 @@ namespace coop
         {
             m_remotes.erase(id);
             m_looks.erase(id);
+            HeardAnim(id, "");
+            HeardModAnims(id, {});
             m_views.erase(id);
             if (m_talk.Busy() && m_talk.Talker() == id)
             {
@@ -2034,11 +2187,11 @@ namespace coop
         const Pose& b = m_sentPose;
         bool moved = a.space != b.space || std::fabs(a.x - b.x) > 1 || std::fabs(a.y - b.y) > 1 ||
             std::fabs(a.z - b.z) > 1 || std::fabs(a.heading - b.heading) > 0.01f || a.flags != b.flags ||
-            a.moves != b.moves || std::fabs(a.pitch - b.pitch) > 0.01f;
+            a.moves != b.moves || std::fabs(a.pitch - b.pitch) > 0.01f || a.runSpeed != b.runSpeed;
         if (m_lastPoseSent != 0 && now - m_lastPoseSent < (moved ? kPoseIntervalMs : kIdlePoseIntervalMs))
             return;
 
-        PlayerState state{m_myId, now, a.space, a.x, a.y, a.z, a.heading, a.flags, a.moves, a.pitch};
+        PlayerState state{m_myId, now, a.space, a.x, a.y, a.z, a.heading, a.flags, a.moves, a.pitch, a.runSpeed};
         if (m_role == Role::Host)
             SendToJoined(Encode(state), false);
         else
@@ -2520,6 +2673,55 @@ namespace coop
             std::vector<Reputation> part(reps.begin() + i,
                 reps.begin() + (i + kMaxReputationsPerMessage < reps.size() ? i + kMaxReputationsPerMessage : reps.size()));
             SendToJoined(Encode(part), true);
+        }
+    }
+
+    bool Coop::IsPlayer(uint8_t id) const
+    {
+        if (id == m_myId || id == kHostPlayerId)
+            return true;
+        if (m_role == Role::Host)
+        {
+            for (const auto& [peer, p] : m_players)
+                if (p.joined && p.id == id)
+                    return true;
+            return false;
+        }
+        return m_remotes.count(id) != 0;
+    }
+
+    void Coop::AskTeleport(uint8_t mover, uint8_t target)
+    {
+        if (!InGame() || mover == target || !IsPlayer(mover) || !IsPlayer(target))
+            return;
+        if (mover == m_myId)
+        {
+            if (m_teleports.size() < 8)
+                m_teleports.push_back(target);
+            return;
+        }
+        if (m_role == Role::Friend)
+        {
+            m_net->Send(1, Encode(Teleport{mover, target}), true);
+            return;
+        }
+        for (const auto& [peer, p] : m_players)
+            if (p.joined && p.id == mover)
+                m_net->Send(peer, Encode(Teleport{mover, target}), true);
+    }
+
+    void Coop::ShareTravelMarkers(const std::vector<uint32_t>& refs)
+    {
+        if (!InGame())
+            return;
+        for (size_t i = 0; i < refs.size(); i += kMaxMarkersPerMessage)
+        {
+            std::vector<uint32_t> part(refs.begin() + i,
+                refs.begin() + (i + kMaxMarkersPerMessage < refs.size() ? i + kMaxMarkersPerMessage : refs.size()));
+            if (m_role == Role::Host)
+                SendToJoined(EncodeTravelMarkers(part), true);
+            else
+                m_net->Send(1, EncodeTravelMarkers(part), true);
         }
     }
 

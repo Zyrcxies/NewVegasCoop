@@ -8,6 +8,7 @@
 
 #include "nvse/GameObjects.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -48,6 +49,109 @@ namespace game
         return name ? name : "?";
     }
 
+    std::string FurnitureAnim(TESObjectREFR* ref)
+    {
+        // Sitting: layer 0 plays the furniture's DynamicIdle file (lab 2026-10-30: a chair, DynamicIdle_ChairSit.kf).
+        const void* anim = IsActor(ref) ? AnimDataOf(static_cast<Actor*>(ref)) : nullptr;
+        if (!anim || AnimGroupName(Field<uint16_t>(anim, process::kAnimGroupIds)) != "DynamicIdle")
+            return "";
+        const void* sequence = Field<const void*>(anim, process::kAnimSequences);
+        const char* name = sequence ? Field<const char*>(sequence, process::kSequenceName) : nullptr;
+        return name ? name : "";
+    }
+
+    namespace
+    {
+        std::string FileOf(const char* path)  // its file name, lower case
+        {
+            std::string name(path);
+            size_t slash = name.find_last_of("\\");
+            name = slash == std::string::npos ? name : name.substr(slash + 1);
+            for (char& c : name)
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return name;
+        }
+
+        // Each animation of the character's playing from that file (any folder, any case).
+        template <typename F> void ForEachPlaying(TESObjectREFR* ref, const std::string& path, F f)
+        {
+            const void* anim = IsActor(ref) ? AnimDataOf(static_cast<Actor*>(ref)) : nullptr;
+            const void* manager = anim ? Field<const void*>(anim, process::kAnimController) : nullptr;
+            if (!manager || path.empty())
+                return;
+            std::string file = FileOf(path.c_str());
+            auto* const* sequences = Field<void* const*>(manager, process::kControllerSequences);
+            uint16_t slots = Field<uint16_t>(manager, process::kControllerSequenceSlots);
+            for (uint16_t i = 0; sequences && i < slots; ++i)
+            {
+                void* sequence = sequences[i];
+                if (!sequence || Field<uint32_t>(sequence, process::kSequenceState) == 0)
+                    continue;
+                const char* name = Field<const char*>(sequence, process::kSequenceName);
+                if (name && FileOf(name) == file)
+                    f(sequence);
+            }
+        }
+    }
+
+    float CachedRunSpeed(TESObjectREFR* ref)
+    {
+        if (!IsActor(ref) || !static_cast<Actor*>(ref)->baseProcess)
+            return 0;
+        const void* cached = Field<const void*>(static_cast<Actor*>(ref)->baseProcess, process::kCachedValues);
+        if (!cached || !(Field<uint32_t>(cached, process::kCachedFlags) & 0x2000))
+            return 0;
+        float speed = Field<float>(cached, process::kCachedRunSpeed);
+        return speed > 0 && speed < 10000 ? speed : 0;
+    }
+
+    std::vector<std::string> ModAnimFiles(TESObjectREFR* ref)
+    {
+        // (Lab, 2026-10-30: Enhanced Movement's sprint played characters\_male\em_sprintm\mtfastforward.kf where
+        // the game's own is Characters\_Male\Locomotion\Male\mtfastforward.kf: kNVSE lowers every name it loads.)
+        std::vector<std::string> files;
+        const void* anim = IsActor(ref) ? AnimDataOf(static_cast<Actor*>(ref)) : nullptr;
+        for (int i = 0; anim && i < dev::kAnimLayers; ++i)
+        {
+            const void* sequence = Field<const void*>(anim, process::kAnimSequences + 4 * i);
+            const char* name = sequence ? Field<const char*>(sequence, process::kSequenceName) : nullptr;
+            if (!name || !*name)
+                continue;
+            std::string file(name);
+            bool lower = std::none_of(file.begin(), file.end(), [](char c) { return c >= 'A' && c <= 'Z'; });
+            if (lower && file.size() > 3 && file.compare(file.size() - 3, 3, ".kf") == 0 &&
+                std::find(files.begin(), files.end(), file) == files.end())
+                files.push_back(file);
+        }
+        std::sort(files.begin(), files.end());
+        return files;
+    }
+
+    void StopAnimFile(TESObjectREFR* ref, const std::string& path)
+    {
+        // kNVSE plays a file outside the game's own tracking (PlayGroup Idle didn't end it: lab 2026-10-30), so it's
+        // ended here, eased out.
+        ForEachPlaying(ref, path, [](void* sequence)
+        {
+            using DeactivateFn = bool(__thiscall*)(void* seq, float easeOut, uint8_t transition);
+            uintptr_t table = *reinterpret_cast<const uintptr_t*>(sequence);
+            (*reinterpret_cast<const DeactivateFn*>(table + process::kSequenceDeactivate))(sequence, 0.3f, 0);
+        });
+    }
+
+    bool IsPlayingAnimFile(TESObjectREFR* ref, const std::string& path, bool loop)
+    {
+        // Looped: the downed one plays once (7.5 s) and ended; started again, it popped up between (lab, 2026-10-30).
+        bool playing = false;
+        ForEachPlaying(ref, path, [&](void* sequence)
+        {
+            playing = true;
+            if (loop)
+                *reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(sequence) + process::kSequenceCycle) = 0;
+        });
+        return playing;
+    }
+
     bool IsJumping(TESObjectREFR* ref)
     {
         if (!IsActor(ref))
@@ -86,8 +190,23 @@ namespace game
         out.processLevel = actor->baseProcess ? static_cast<int>(Field<uint32_t>(actor->baseProcess, process::kLevel)) : -1;
         const void* anim = AnimDataOf(actor);
         out.animsKnown = anim != nullptr;
+        out.lockedControls = ref == Player() ? PlayerDisabledControls() : -1;
+        const void* cached = actor->baseProcess ? Field<const void*>(actor->baseProcess, process::kCachedValues) : nullptr;
+        uint32_t cachedFlags = cached ? Field<uint32_t>(cached, process::kCachedFlags) : 0;
+        out.walkSpeed = (cachedFlags & 0x1000) ? Field<float>(cached, process::kCachedWalkSpeed) : 0;
+        out.runSpeed = (cachedFlags & 0x2000) ? Field<float>(cached, process::kCachedRunSpeed) : 0;
         for (int i = 0; i < dev::kAnimLayers; ++i)
             out.anims[i] = anim ? Field<uint16_t>(anim, process::kAnimGroupIds + 2 * i) : 0;
+        const void* idle = anim ? Field<const void*>(anim, process::kAnimIdle) : nullptr;
+        const TESForm* idleForm = idle && Field<const void*>(idle, process::kIdleActor) == actor ?
+            Field<const TESForm*>(idle, process::kIdleForm) : nullptr;
+        out.idle = idleForm ? idleForm->refID : 0;
+        for (int i = 0; i < dev::kAnimLayers; ++i)
+        {
+            const void* sequence = anim ? Field<const void*>(anim, process::kAnimSequences + 4 * i) : nullptr;
+            const char* name = sequence ? Field<const char*>(sequence, process::kSequenceName) : nullptr;
+            out.sequences[i] = name ? name : "";
+        }
         return true;
     }
 

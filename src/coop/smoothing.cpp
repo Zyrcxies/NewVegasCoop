@@ -75,6 +75,7 @@ namespace coop
             out.pitch = a.pose.pitch + (b.pose.pitch - a.pose.pitch) * t;
             out.flags = a.pose.flags;  // switches, not blended
             out.moves = a.pose.moves;
+            out.runSpeed = a.pose.runSpeed;
             return true;
         }
         out = m_snaps[m_count - 1].pose;  // no newer update yet: stay at the last one

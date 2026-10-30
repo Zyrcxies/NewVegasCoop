@@ -18,7 +18,7 @@
 namespace net
 {
     // Bump whenever any message changes; players must match exactly.
-    constexpr uint32_t kProtocolVersion = 64;
+    constexpr uint32_t kProtocolVersion = 65;
     constexpr size_t kMaxNameLength = 32;
     constexpr size_t kMaxReasonLength = 200;
     constexpr size_t kMaxMessageSize = 64 * 1024;
@@ -91,6 +91,14 @@ namespace net
         NpcPile = 62,            // friend -> host: the host's NPC turned to goo or ash in my game (my energy weapon)
         Fighting = 64,           // host -> friend: enemies are fighting your character (or have stopped)
         ReputationGain = 65,     // friend -> host: my game changed these reputations by itself (my kill, say)
+        TravelMarkers = 66,      // both ways: map markers that can be fast travelled to (friend -> host: found in my
+                                 // game; host -> friends: anyone's)
+        Teleport = 67,           // both ways: the teleporter item: this player goes to that one (friend -> host:
+                                 // asked by me; host -> the one who goes)
+        PlayerAnim = 68,         // both ways: the furniture animation a player's character plays (sitting in a chair),
+                                 // or none (friend -> host: theirs; host -> friends: whose)
+        PlayerModAnims = 69,     // both ways: the animation files from mods a player's character plays now (a sprint
+                                 // mod's run) (friend -> host: theirs; host -> friends: whose)
         MineChange = 63,         // both ways: a mine placed in the world was disarmed, or is gone, in my game
                                  // (friend -> host: theirs; host -> friends: anyone's)
         ModsMatch = 48,          // host -> friend who only checks (at the main menu): your mods are mine; bye
@@ -191,6 +199,8 @@ namespace net
         uint8_t flags = 0;    // coop::Pose flags (weapon out, sneaking); unknown bits are rejected
         uint16_t moves = 0;   // the game's movement flags (coop::moves), all 16 (each puppet copies what it can)
         float pitch = 0;      // radians, looking down (+) or up (-), at most kMaxPitch either way
+        uint16_t runSpeed = 0;  // their running speed now, game units a second (the game's own, cached: 338.8 normally,
+                                // 609.8 sprinting with Enhanced Movement: lab 2026-10-30); 0 unknown
     };
     constexpr uint8_t kKnownPlayerStateFlags = 0x03;
     constexpr float kMaxPitch = 1.6f;  // a little over straight up or down (the game stops at about 1.5)
@@ -552,6 +562,42 @@ namespace net
     Bytes EncodeGains(const std::vector<ReputationGain>& m);  // sends at most kMaxReputationsPerMessage
     bool DecodeGains(Reader& r, std::vector<ReputationGain>& m);  // fails on none, too many, a bad form or value
     bool Decode(Reader& r, std::vector<Reputation>& m);  // fails on none, too many, a bad form or value
+    // A player's character in furniture (Alex, 2026-10-30: sitting down synced): the animation file its game plays
+    // there, so everyone's copy of that character plays it too.
+    constexpr size_t kMaxAnimPath = 160;
+    struct PlayerAnim
+    {
+        uint8_t player = 0;  // whose (from a friend: ignored, the host knows who sent it)
+        std::string path;    // "" none, else a character animation file (IsAnimPath)
+    };
+    Bytes Encode(const PlayerAnim& m);
+    bool Decode(Reader& r, PlayerAnim& m);
+    // Animations from mods (Alex, 2026-10-30: Enhanced Movement's sprint, and any other kNVSE animation mod): the files
+    // a player's character plays now that a mod gave it (kNVSE's; the game's own aren't sent), so everyone's copy of
+    // that character plays them too. Sent when the list changes.
+    constexpr size_t kMaxModAnims = 8;
+    struct PlayerModAnims
+    {
+        uint8_t player = 0;              // whose (from a friend: ignored)
+        std::vector<std::string> paths;  // kMaxModAnims at most, each IsAnimPath
+    };
+    Bytes Encode(const PlayerModAnims& m);
+    bool Decode(Reader& r, PlayerModAnims& m);
+    // A character animation file: under characters/ or animgroupoverride/ (or those under meshes/; backslashes),
+    // ending .kf, of letters, digits, spaces, _ - . ( ) and backslashes, no ".." (a name from the network our game
+    // loads, in a console line).
+    bool IsAnimPath(const std::string& path);
+    // The teleporter item (Alex, 2026-10-30: for when someone is stuck): `mover` goes to where `target` is.
+    struct Teleport
+    {
+        uint8_t mover = 0, target = 0;  // player ids, not the same
+    };
+    Bytes Encode(const Teleport& m);
+    bool Decode(Reader& r, Teleport& m);
+    // Fast travel (Alex, 2026-10-30): a place anyone discovers is everyone's. Map marker refs (from the game's files).
+    constexpr size_t kMaxMarkersPerMessage = 200;
+    Bytes EncodeTravelMarkers(const std::vector<uint32_t>& refs);  // sends at most kMaxMarkersPerMessage
+    bool DecodeTravelMarkers(Reader& r, std::vector<uint32_t>& refs);  // fails on none, too many or a bad ref
     // Conversations (step 7.4).
     struct TalkState
     {

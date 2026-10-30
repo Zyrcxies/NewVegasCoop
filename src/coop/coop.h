@@ -70,6 +70,7 @@ namespace coop
     constexpr size_t kMaxQueuedDoorUses = 32;  // host: friends' door uses not taken yet
     constexpr size_t kMaxQueuedItemChanges = 64;  // host: friends' container changes not taken yet
     constexpr size_t kMaxQueuedQuests = 4096;     // friend: quest updates not taken yet
+    constexpr size_t kMaxQueuedMarkers = 4096;    // fast-travel map markers heard, not taken yet
     constexpr uint32_t kItemResendMs = 3000;  // host: every item near the group again (changes go at once)
     constexpr float kItemSendMoveDistance = 16;  // host: an item moved this far is sent again
     constexpr float kItemSendTurn = 0.1f;        // (radians) or turned this much (step 8.9)
@@ -253,6 +254,15 @@ namespace coop
         void SetMyLooks(const net::PlayerLooks& looks);
         const std::map<uint8_t, net::PlayerLooks>& Looks() const { return m_looks; }
         uint32_t LooksChanges() const { return m_looksChanges; }
+        // Our character's furniture animation (sitting in a chair; "" none): to everyone when it changes (and to whoever
+        // joins). The others', by player (only those playing one), with a count that goes up each time one changes.
+        void SetMyAnim(const std::string& path);
+        const std::map<uint8_t, std::string>& Anims() const { return m_anims; }
+        uint32_t AnimChanges() const { return m_animChanges; }
+        // The animation files from mods our character plays now (sent when the list changes, and to whoever joins);
+        // the others', by player (only those playing any).
+        void SetMyModAnims(const std::vector<std::string>& paths);
+        const std::map<uint8_t, std::vector<std::string>>& ModAnims() const { return m_modAnims; }
         std::map<uint32_t, net::RadioLine> TakeRadioLines() { return std::move(m_radioLines); }
         std::vector<net::PlayerCommand> TakePlayerCommands() { return std::move(m_playerCommands); }
         std::vector<std::string> TakeDesyncNotices() { return std::move(m_desyncNotices); }
@@ -371,6 +381,14 @@ namespace coop
         std::vector<std::pair<uint8_t, net::ReputationGain>> TakeReputationGains() { return std::move(m_repGains); }
         // Friend: the host's reputations heard since the last call.
         std::vector<net::Reputation> TakeReputations() { return std::move(m_reputations); }
+        // Fast travel: map markers our game can travel to that others may not have (friend: to the host; host: to
+        // every friend), and the ones heard since the last call (host: friends' finds; friend: the host's list).
+        void ShareTravelMarkers(const std::vector<uint32_t>& refs);
+        // The teleporter item: player `mover` goes to player `target` (either may be us; the host passes it on).
+        // TakeTeleports: the players we were asked to go to since the last call.
+        void AskTeleport(uint8_t mover, uint8_t target);
+        std::vector<uint8_t> TakeTeleports() { return std::move(m_teleports); }
+        std::vector<uint32_t> TakeTravelMarkers() { return std::move(m_travelMarkers); }
         // Host: another player's gain that our game also made (it ran their conversation's line): everyone but them
         // gets it from us.
         void ShareProgressFor(uint8_t playerId, int32_t xp, int32_t karma);
@@ -582,6 +600,15 @@ namespace coop
         bool m_hasMyLooks = false, m_myLooksSent = false;
         std::map<uint8_t, net::PlayerLooks> m_looks;      // others' looks, by player
         uint32_t m_looksChanges = 0;
+        std::string m_myAnim;
+        bool m_myAnimSent = true;
+        std::map<uint8_t, std::string> m_anims;           // others' furniture animations, by player
+        uint32_t m_animChanges = 0;
+        void HeardAnim(uint8_t player, const std::string& path);
+        std::vector<std::string> m_myModAnims;
+        bool m_myModAnimsSent = true;
+        std::map<uint8_t, std::vector<std::string>> m_modAnims;  // others' animation files from mods, by player
+        void HeardModAnims(uint8_t player, const std::vector<std::string>& paths);
         int32_t m_myXp = 0;                               // host: our player's XP (sent with each welcome)
         int32_t m_hostXp = 0;                             // friend: the host's, from its welcome
         bool m_hostXpWaiting = false;
@@ -624,6 +651,9 @@ namespace coop
         std::vector<net::RefEnable> m_refEnables;         // friend: not taken yet
         std::vector<net::Progress> m_progress;            // others' gains, not taken yet
         std::vector<net::Reputation> m_reputations;       // friend: not taken yet
+        std::vector<uint32_t> m_travelMarkers;           // not taken yet
+        std::vector<uint8_t> m_teleports;                // players to go to, not taken yet
+        bool IsPlayer(uint8_t id) const;                 // us, the host or another player we know of
         std::vector<std::pair<uint8_t, net::ReputationGain>> m_repGains;  // host: friends', not taken yet
         TalkLock m_talk;                                  // host: decides; friend: as the host last said
         void SendTalk(net::PeerId to);                    // host: who is talking, to one friend (0: all)

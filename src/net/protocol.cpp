@@ -156,6 +156,7 @@ namespace net
         w.U8(m.flags);
         w.U16(m.moves);
         w.F32(m.pitch);
+        w.U16(m.runSpeed);
         return w.Take();
     }
 
@@ -264,7 +265,7 @@ namespace net
         if (!r.U8(m.playerId) || !r.U32(m.timeMs) || !r.U32(m.space) || !r.F32(m.x) || !r.F32(m.y) || !r.F32(m.z))
             return false;
         if (!r.F32(m.heading) || !r.U8(m.flags) || (m.flags & ~kKnownPlayerStateFlags) != 0 || !r.U16(m.moves) ||
-            !r.F32(m.pitch) || std::fabs(m.pitch) > kMaxPitch || !r.AtEnd())
+            !r.F32(m.pitch) || std::fabs(m.pitch) > kMaxPitch || !r.U16(m.runSpeed) || !r.AtEnd())
             return false;
         return true;
     }
@@ -907,6 +908,96 @@ namespace net
             if (!r.U32(rep.form) || !IsSharedRef(rep.form) || IsMadeWhilePlaying(rep.form) || !r.F32(rep.fame) ||
                 !r.F32(rep.infamy) || rep.fame < 0 || rep.fame > kMaxReputation || rep.infamy < 0 ||
                 rep.infamy > kMaxReputation)
+                return false;
+        return r.AtEnd();
+    }
+
+    bool IsAnimPath(const std::string& path)
+    {
+        if (path.empty() || path.size() > kMaxAnimPath || path.find("..") != std::string::npos)
+            return false;
+        std::string lower;
+        for (char c : path)
+        {
+            // (Letters, digits, spaces and _ - . ( ) and backslashes only: it goes into a console line.)
+            if (c == 0 || (!std::isalnum(static_cast<unsigned char>(c)) && !std::strchr(" _-.()\\", c)))
+                return false;
+            lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        auto starts = [&](const char* prefix) { return lower.compare(0, std::strlen(prefix), prefix) == 0; };
+        bool under = starts("characters\\") || starts("meshes\\characters\\") || starts("animgroupoverride\\") ||
+            starts("meshes\\animgroupoverride\\");
+        return under && lower.size() > 3 && lower.compare(lower.size() - 3, 3, ".kf") == 0;
+    }
+
+    Bytes Encode(const PlayerModAnims& m)
+    {
+        Writer w(MsgType::PlayerModAnims);
+        w.U8(m.player);
+        size_t count = m.paths.size() < kMaxModAnims ? m.paths.size() : kMaxModAnims;
+        w.U8(static_cast<uint8_t>(count));
+        for (size_t i = 0; i < count; ++i)
+            w.String(m.paths[i], kMaxAnimPath);
+        return w.Take();
+    }
+
+    bool Decode(Reader& r, PlayerModAnims& m)
+    {
+        uint8_t count;
+        if (!r.U8(m.player) || !r.U8(count) || count > kMaxModAnims)
+            return false;
+        m.paths.resize(count);
+        for (std::string& path : m.paths)
+            if (!r.String(path, kMaxAnimPath) || !IsAnimPath(path))
+                return false;
+        return r.AtEnd();
+    }
+
+    Bytes Encode(const PlayerAnim& m)
+    {
+        Writer w(MsgType::PlayerAnim);
+        w.U8(m.player);
+        w.String(m.path, kMaxAnimPath);
+        return w.Take();
+    }
+
+    bool Decode(Reader& r, PlayerAnim& m)
+    {
+        return r.U8(m.player) && r.String(m.path, kMaxAnimPath) && (m.path.empty() || IsAnimPath(m.path)) &&
+            r.AtEnd();
+    }
+
+    Bytes Encode(const Teleport& m)
+    {
+        Writer w(MsgType::Teleport);
+        w.U8(m.mover);
+        w.U8(m.target);
+        return w.Take();
+    }
+
+    bool Decode(Reader& r, Teleport& m)
+    {
+        return r.U8(m.mover) && r.U8(m.target) && m.mover != m.target && r.AtEnd();
+    }
+
+    Bytes EncodeTravelMarkers(const std::vector<uint32_t>& refs)
+    {
+        Writer w(MsgType::TravelMarkers);
+        size_t count = refs.size() < kMaxMarkersPerMessage ? refs.size() : kMaxMarkersPerMessage;
+        w.U8(static_cast<uint8_t>(count));
+        for (size_t i = 0; i < count; ++i)
+            w.U32(refs[i]);
+        return w.Take();
+    }
+
+    bool DecodeTravelMarkers(Reader& r, std::vector<uint32_t>& refs)
+    {
+        uint8_t count;
+        if (!r.U8(count) || count == 0 || count > kMaxMarkersPerMessage)
+            return false;
+        refs.resize(count);
+        for (uint32_t& ref : refs)
+            if (!r.U32(ref) || !IsSharedRef(ref) || IsMadeWhilePlaying(ref))
                 return false;
         return r.AtEnd();
     }

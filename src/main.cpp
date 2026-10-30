@@ -3,6 +3,7 @@
 #include "nvse/PluginAPI.h"
 
 #include "config.h"
+#include "net/session.h"
 #include "coop/clock.h"
 #include "coop/coop.h"
 #include "coop/game_mode.h"
@@ -73,6 +74,7 @@ namespace
     game::Dialogue g_dialogue;  // one conversation at a time; friends' lines run in the host's world (step 7.4)
     game::Inspector g_inspector;
     game::Mirror g_mirror;
+    bool g_cutscene = false;  // a script has our movement locked (not our own downed or waiting): friends hidden
     bool g_waitForHostLoad = false;  // friend, after a game over: frozen until the host's game loads a save (step 8.3)
     void FollowHostSaves(uint32_t now);
     void ServeFriendSaves();
@@ -167,6 +169,21 @@ namespace
     // paused must all be set to run (step 7.3: its conversation handling is what our own attempt lacked).
     std::string g_pausingMenus;  // the ones its settings leave paused ("" none)
 
+    // Required plugins that didn't load (Dovahcade, 2026-10-30: Real Time Menus' .ini was there but not its .dll; the
+    // log said so, the game didn't, and saving and loading from the menu froze in co-op). Co-op won't start without
+    // them, and says why on screen.
+    std::string g_missingPlugins;  // "" all there
+
+    bool PluginsMissing()
+    {
+        if (g_missingPlugins.empty())
+            return false;
+        game::ShowMessage("Co-op can't start: " + g_missingPlugins + (g_missingPlugins.find(',') == std::string::npos ?
+            " isn't" : " aren't") + " installed (or didn't load). Co-op needs JIP LN NVSE, kNVSE and Real Time Menus "
+            "in Fallout New Vegas\\Data\\NVSE\\Plugins. Install them, then restart the game.");
+        return true;
+    }
+
     void CheckRealTimeMenus()
     {
         const std::string ini = PluginFolder() + "RealTimeMenus.ini";
@@ -253,6 +270,7 @@ namespace
         net::SteamId steam = 0;
         std::string address;
         std::string label;  // for the screen
+        uint16_t port = 0;  // 0: NVCoop.ini's Port
     };
     JoinTarget g_joinTarget;
 
@@ -278,7 +296,8 @@ namespace
             return true;
         }
         std::string address = g_joinTarget.address.empty() ? g_config.address : g_joinTarget.address;
-        return g_coop.Join(address, g_config.port, MyName(), checkModsOnly);
+        uint16_t port = g_joinTarget.port ? g_joinTarget.port : g_config.port;
+        return g_coop.Join(address, port, MyName(), checkModsOnly);
     }
 
     enum class MenuCheck { NotYet, Scanning, Comparing, Done } g_menuCheck = MenuCheck::NotYet;
@@ -375,14 +394,28 @@ namespace
     bool g_warnNoLargeAddress = false;  // once, at the main menu
     bool HaveSaves();
 
+    // Host Co-op asks who can join first (Alex, 2026-10-30: by IP too, picked here instead of in NVCoop.ini).
+    constexpr int kHostWhoQuestion = 15;  // our AskChoice id
+    bool g_askedHostWho = false;
+    void HostFor(bool byIp);
+
     void HostClicked()
     {
+        if (PluginsMissing())
+            return;
+        g_askedHostWho = game::AskChoice("Who can join your game?", {"Steam friends", "Steam friends, and by IP address",
+            "Cancel"}, kHostWhoQuestion);
+    }
+
+    void HostFor(bool byIp)
+    {
+        g_config.ipHosting = byIp;
         if (g_coop.GetRole() != coop::Role::None && !g_coop.InGame())
             g_coop.Stop();  // (comparing from the main menu)
         g_config.mode = Config::Mode::Host;
         g_menuCheck = MenuCheck::Done;
         g_joinClicked = false;
-        LOG_INFO("Main menu: Host Co-op");
+        LOG_INFO("Main menu: Host Co-op%s", byIp ? " (by IP too)" : "");
         if (HaveSaves())
             g_openLoadMenu = true;  // the save to host
         else
@@ -390,24 +423,72 @@ namespace
                 "Mitchell's house.");
     }
 
-    // Join Co-op: first, whose game. (For now the host in NVCoop.ini; Steam friends hosting come with step 8.5.)
-    constexpr int kJoinWhoQuestion = 5;  // our AskChoice id
-    bool g_askedWhoToJoin = false;
+    // Co-op Address (the pause menu, when hosting by IP is on): this PC's addresses, only when asked for (Alex,
+    // 2026-10-30: streamers).
+    void AddressClicked()
+    {
+        if (!g_config.ipHosting || g_coop.GetRole() != coop::Role::Host)
+        {
+            game::ShowMessage("Joining by IP is off. To let friends join by IP address, pick \"Steam friends, and by IP "
+                "address\" when you click Host Co-op.");
+            return;
+        }
+        std::string list;
+        for (const std::string& a : net::LocalAddresses())
+            list += "\n" + a;
+        game::ShowMessage("Friends joining by IP put one of these in JoinAddress (NVCoop.ini), port " +
+            std::to_string(g_config.port) + " (UDP):" + (list.empty() ? std::string("\n(none found)") : list) +
+            "\n\nOver the internet with port forwarding, it's your router's public address instead (search "
+            "\"what is my IP\"). Don't show this on stream.");
+    }
+
+    // Join Co-op asks how first (Alex, 2026-10-30): a Steam friend's game, or by IP address (typed in the game, hidden
+    // on screen, the last one remembered in NVCoop.ini).
+    constexpr int kJoinWhoQuestion = 5;   // our AskChoice ids
+    constexpr int kJoinHowQuestion = 13;
+    constexpr int kAddressQuestion = 14;
+    bool g_askedWhoToJoin = false, g_askedHowToJoin = false, g_typingAddress = false;
     std::vector<JoinTarget> g_joinChoices;  // the buttons of "Join whose game?" (Cancel after them)
+    enum class JoinHow { SteamFriend, TypeAddress, LastAddress, LanCoop };
+    std::vector<JoinHow> g_howChoices;      // the buttons of "Join how?" (Cancel after them)
+    size_t g_addressShown = 0;              // how many characters the box shows
 
     void JoinClicked()
     {
         LOG_INFO("Main menu: Join Co-op");
+        if (PluginsMissing())
+            return;
+        std::vector<std::string> buttons;
+        g_howChoices.clear();
+        if (g_config.lanCoop)  // (first: the lab's "pick 0")
+        {
+            buttons.push_back(g_config.address + " (LanCoop)");
+            g_howChoices.push_back(JoinHow::LanCoop);
+        }
+        buttons.push_back("A Steam friend's game");
+        g_howChoices.push_back(JoinHow::SteamFriend);
+        buttons.push_back("By IP address");
+        g_howChoices.push_back(JoinHow::TypeAddress);
+        if (!g_config.joinAddress.empty())  // (the address isn't shown: streamers)
+        {
+            buttons.push_back("The last IP address");
+            g_howChoices.push_back(JoinHow::LastAddress);
+        }
+        buttons.push_back("Cancel");
+        g_askedHowToJoin = game::AskChoice("Join how?", buttons, kJoinHowQuestion);
+    }
+
+    void JoinSteamFriend()
+    {
         g_joinChoices.clear();
         for (const game::SteamFriend& f : game::HostingFriends())
-            if (g_joinChoices.size() < 8)
+            if (g_joinChoices.size() < 9)
                 g_joinChoices.push_back({f.id, "", f.mode.empty() ? f.name : f.name + " (" + f.mode + ")"});
-        if (g_config.lanCoop)
-            g_joinChoices.push_back({0, g_config.address, g_config.address + " (LanCoop)"});
         if (g_joinChoices.empty())
         {
             game::ShowMessage(game::SteamReady() ? "None of your Steam friends are hosting co-op right now. (They "
-                "need to be in a game, with Host Co-op.)" : "Joining needs Steam running and logged in.");
+                "need to be in a game, with Host Co-op.)" : "Joining a Steam friend needs Steam running and logged in. "
+                "You can join by IP address instead.");
             return;
         }
         std::vector<std::string> buttons;
@@ -415,6 +496,68 @@ namespace
             buttons.push_back(t.label);
         buttons.push_back("Cancel");
         g_askedWhoToJoin = game::AskChoice("Join whose game?", buttons, kJoinWhoQuestion);
+    }
+
+    std::string AddressBoxText(size_t typed)
+    {
+        return "The host's address (an IP like 203.0.113.5, or 203.0.113.5:27960), hidden as you type:\n\n" +
+            (typed ? std::string(typed, '*') : std::string("_")) + "\n\nEnter joins, Esc cancels.";
+    }
+
+    void StartAddressEntry()
+    {
+        if (!game::StartTextEntry())
+        {
+            game::ShowMessage("Couldn't take typing in the game (see NVCoop.log).");
+            return;
+        }
+        g_typingAddress = true;
+        g_addressShown = 0;
+        game::AskChoice(AddressBoxText(0), {"Cancel"}, kAddressQuestion);
+    }
+
+    void JoinHost(const JoinTarget& target);
+
+    void UpdateAddressEntry()
+    {
+        game::EntryState state = game::TextEntryState();
+        int box = game::TakeChoice(kAddressQuestion);
+        if (state == game::EntryState::Typing)
+        {
+            if (box != -1)  // Cancel clicked (or the box couldn't show)
+            {
+                game::StopTextEntry();
+                g_typingAddress = false;
+                return;
+            }
+            size_t typed = game::TextEntryLength();
+            if (typed != g_addressShown && game::MessageShows(AddressBoxText(g_addressShown)))
+            {
+                game::SetMessageText(AddressBoxText(typed));
+                g_addressShown = typed;
+            }
+            return;
+        }
+        g_typingAddress = false;
+        game::DropQuestion(kAddressQuestion);
+        if (state != game::EntryState::Done)
+        {
+            game::StopTextEntry();
+            return;
+        }
+        std::string text = game::TakeTextEntry(), host;
+        uint16_t port = g_config.port;
+        if (!net::ParseHostAddress(text, host, port))
+        {
+            game::ShowMessage("That isn't an address: type an IP like 203.0.113.5, or 203.0.113.5:27960.");
+            return;
+        }
+        g_config.joinAddress = host;
+        g_config.joinPort = port;
+        // Remembered for next time ("The last IP address"), in NVCoop.ini, never on screen or in the log.
+        std::string saved = port == g_config.port ? host : host + ":" + std::to_string(port);
+        WritePrivateProfileStringA("Coop", "JoinAddress", saved.c_str(), (PluginFolder() + "NVCoop.ini").c_str());
+        JoinHost({0, host, "the host by IP", port});
     }
 
     void JoinHost(const JoinTarget& target)
@@ -445,6 +588,36 @@ namespace
             g_openLoadMenu = false;
             game::OpenLoadMenu();
         }
+        if (g_askedHostWho)
+        {
+            int who = game::TakeChoice(kHostWhoQuestion);
+            if (who != -1)
+            {
+                g_askedHostWho = false;
+                if (who == 0 || who == 1)
+                    HostFor(who == 1);
+            }
+        }
+        if (g_askedHowToJoin)
+        {
+            int how = game::TakeChoice(kJoinHowQuestion);
+            if (how != -1)
+            {
+                g_askedHowToJoin = false;
+                if (how >= 0 && how < static_cast<int>(g_howChoices.size()))
+                    switch (g_howChoices[how])
+                    {
+                    case JoinHow::SteamFriend: JoinSteamFriend(); break;
+                    case JoinHow::TypeAddress: StartAddressEntry(); break;
+                    case JoinHow::LastAddress:
+                        JoinHost({0, g_config.joinAddress, "the host by IP", g_config.joinPort});
+                        break;
+                    case JoinHow::LanCoop: JoinHost({0, g_config.address, g_config.address + " (LanCoop)"}); break;
+                    }
+            }
+        }
+        if (g_typingAddress)
+            UpdateAddressEntry();
         int choice = g_askedWhoToJoin ? game::TakeChoice(kJoinWhoQuestion) : -1;
         if (choice < 0)
             return;
@@ -598,6 +771,102 @@ namespace
                 game::Activate(ours);  // (the conversation, this time let through)
         }
     }
+    // The teleporter item (Alex, 2026-10-30: for when someone is stuck): always in our inventory while in co-op;
+    // using it asks whether to go to someone or bring them here.
+    constexpr int kTeleportQuestion = 12;  // our AskChoice id
+    uint32_t g_nextTeleporterLook = 0;
+    int g_teleportersHad = -1;  // -1: not given yet this session
+    bool g_teleportAsked = false;
+    std::vector<std::pair<uint8_t, bool>> g_teleportChoices;  // per button: the player, and true to bring them here
+
+    void GoToPlayer(uint8_t target, uint32_t now)
+    {
+        auto it = g_coop.Remotes().find(target);
+        coop::Pose pose;
+        std::string name = g_coop.NameOf(target);
+        if (it == g_coop.Remotes().end() || !it->second.motion.Sample(now, pose) || !game::TravelTo(pose))
+        {
+            LOG_WARN("Teleporter: couldn't go to %s (no place known for them)", name.c_str());
+            game::Notify(("Co-op: couldn't find " + name).c_str());
+            return;
+        }
+        LOG_INFO("Teleporter: went to %s (%08X %.0f %.0f %.0f)", name.c_str(), pose.space, pose.x, pose.y, pose.z);
+        game::Notify(("Co-op: teleported to " + name).c_str());
+    }
+
+    // Sitting synced (Alex, 2026-10-30): the furniture animation our character plays (a chair's), for everyone's copy.
+    uint32_t g_nextAnimLook = 0;
+
+    void ShareFurnitureAnim(uint32_t now)
+    {
+        if (!coop::IsDue(now, g_nextAnimLook))
+            return;
+        g_nextAnimLook = now + 100;
+        TESObjectREFR* me = game::Player();
+        g_coop.SetMyAnim(g_coop.InGame() && me ? game::FurnitureAnim(me) : std::string());
+    }
+
+    void Teleporter(uint32_t now)
+    {
+        TESObjectREFR* me = game::Player();
+        TESForm* item = g_teleportersHad >= 0 || g_coop.InGame() ? game::TeleporterItem() : nullptr;
+        if (!g_coop.InGame() || !me || !item)
+        {
+            if (g_teleportersHad > 0 && me && item)
+                game::ChangeItem(me, item->refID, -game::ItemCount(me, item));  // co-op is over: it goes
+            g_teleportersHad = -1;
+            g_teleportAsked = false;
+            return;
+        }
+        for (uint8_t target : g_coop.TakeTeleports())
+            GoToPlayer(target, now);
+        if (g_teleportAsked)
+        {
+            int choice = game::TakeChoice(kTeleportQuestion);
+            if (choice != -1)
+            {
+                g_teleportAsked = false;
+                if (choice >= 0 && static_cast<size_t>(choice) < g_teleportChoices.size())
+                {
+                    auto [who, bring] = g_teleportChoices[choice];
+                    LOG_INFO("Teleporter: %s %s", bring ? "bringing" : "going to", g_coop.NameOf(who).c_str());
+                    if (bring)
+                        game::Notify(("Co-op: bringing " + g_coop.NameOf(who) + " here").c_str());
+                    g_coop.AskTeleport(bring ? who : g_coop.MyPlayerId(), bring ? g_coop.MyPlayerId() : who);
+                }
+            }
+        }
+        if (!coop::IsDue(now, g_nextTeleporterLook))
+            return;
+        g_nextTeleporterLook = now + 250;
+        int have = game::ItemCount(me, item);
+        // One fewer, and not moved into a box or sold: used.
+        if (g_teleportersHad > 0 && have < g_teleportersHad && !game::OpenContainer() && !g_teleportAsked)
+        {
+            std::vector<std::string> buttons;
+            g_teleportChoices.clear();
+            for (const auto& [id, remote] : g_coop.Remotes())
+                if (g_teleportChoices.size() < 8)
+                {
+                    buttons.push_back("Go to " + g_coop.NameOf(id));
+                    g_teleportChoices.push_back({id, false});
+                    buttons.push_back("Bring " + g_coop.NameOf(id) + " here");
+                    g_teleportChoices.push_back({id, true});
+                }
+            buttons.push_back("Cancel");
+            LOG_INFO("Teleporter: used (%zu others to pick from)", g_teleportChoices.size() / 2);
+            g_teleportAsked = game::AskChoice(g_teleportChoices.empty() ? "Co-op Teleporter: nobody else is here" :
+                "Co-op Teleporter", buttons, kTeleportQuestion);
+        }
+        if (have != 1)
+        {
+            game::ChangeItem(me, item->refID, 1 - have);
+            if (g_teleportersHad < 0)
+                LOG_INFO("Teleporter: given (we had %d)", have);
+        }
+        g_teleportersHad = 1;
+    }
+
     bool g_progressShown = false;
     std::string g_progressText;  // what it says now (only that box is changed: another may be on screen)
     uint32_t g_nextProgress = 0;
@@ -727,6 +996,11 @@ namespace
 
     void StartCoop()
     {
+        if (PluginsMissing())
+        {
+            LOG_ERROR("Co-op not started: %s missing", g_missingPlugins.c_str());
+            return;
+        }
         if (!g_pausingMenus.empty())
             game::Notify("Co-op: Real Time Menus still pauses some menus (see NVCoop.log)");
         // Step 8.1, VATS in real time: Real Time Menus slows time while aiming (its fVATSTimeMult, 0.02), but each
@@ -774,14 +1048,16 @@ namespace
             break;  // (not reached: the main menu's buttons pick Host or Join)
         case Config::Mode::Host:
         {
-            // Through Steam (friends only, no open ports); the IP connection too only when asked (labs).
+            // Through Steam (friends only, no open ports); the IP connection too only when asked (IpHosting=1:
+            // port forwarding or a VPN; LanCoop=1 in labs).
+            bool byIp = config.ipHosting || config.lanCoop;
             std::unique_ptr<net::SteamSession> steam;
             if (game::SteamReady())
             {
                 steam = std::make_unique<net::SteamSession>(game::Steam());
                 steam->StartHost(coop::kMaxFriends + 2);
             }
-            if (steam && !config.lanCoop)
+            if (steam && !byIp)
                 g_coop.HostOn(std::move(steam), MyName());
             else if (steam)
             {
@@ -793,11 +1069,18 @@ namespace
                     g_coop.HostOn(std::move(steam), MyName());
                 }
             }
-            else if (!config.lanCoop || !g_coop.Host(config.port, MyName()))
+            else if (!byIp || !g_coop.Host(config.port, MyName()))
             {
-                LOG_ERROR("Couldn't host: %s", config.lanCoop ? "the port is taken" :
-                    "Steam isn't running or logged in (LanCoop=1 hosts on the IP connection instead)");
+                LOG_ERROR("Couldn't host: %s", byIp ? "the port is taken" :
+                    "Steam isn't running or logged in (IpHosting=1 lets friends join by IP instead)");
                 game::Notify("Co-op: couldn't host (see NVCoop.log)", 8);
+            }
+            if (config.ipHosting && g_coop.GetRole() == coop::Role::Host)
+            {
+                // (Not the addresses, on screen or in the log: streamers, and logs posted publicly. The pause menu's
+                // Co-op Address shows them when asked.)
+                LOG_INFO("Joining by IP is on: port %u (UDP)", config.port);
+                game::Notify("Co-op: friends can join by IP (your address: pause menu > Co-op Address)", 8);
             }
             break;
         }
@@ -1014,6 +1297,9 @@ namespace
 
     // Our own downed mode: up at 1 health with controls off until revived. (The game's knock-out, from the
     // player being essential, never ends by itself for the player, so we wake them straight out of it.)
+    // Downed players lie in pain (Alex, 2026-10-30): our own character too (seen in third person), as friends see us.
+    const std::string kDownedAnim = "Characters\\_Male\\IdleAnims\\dlcpittlayingonfloorinpain.kf";
+
     void SetDowned(bool down, uint32_t now)
     {
         if (down == g_downed)
@@ -1021,7 +1307,28 @@ namespace
         g_downed = down;
         g_downedAt = g_nextBleedNotice = now;
         game::SetPlayerControls(!down);
+        if (down)
+            game::PlayAnimFile(game::Player(), kDownedAnim);
+        else
+            game::StopAnimFile(game::Player(), kDownedAnim);
         LOG_INFO("%s", down ? "We're down" : "We're back up");
+    }
+
+    // The revive bar (Alex, 2026-10-30): while we hold the activate key on a downed friend, under the crosshair.
+    std::string g_revivingName;
+
+    void UpdateReviveBar(uint32_t now)
+    {
+        if (g_reviving < 0 || !g_coop.InGame())
+        {
+            game::ShowReviveBar("");
+            return;
+        }
+        constexpr int kCells = 20;
+        uint32_t held = now - g_reviveStart;
+        int done = held >= kReviveHoldMs ? kCells : static_cast<int>(held * kCells / kReviveHoldMs);
+        game::ShowReviveBar("Reviving " + g_revivingName + "\n[" + std::string(done, '#') +
+            std::string(kCells - done, '-') + "]");
     }
 
     void UpdateDowned(uint32_t now, const coop::Pose& me, float health, float maxHealth, bool healthFresh)
@@ -1085,6 +1392,14 @@ namespace
         }
         if (g_downed)
         {
+            // (Getting up from the game's knock-out can end it: started again, as friends' characters' are.)
+            static uint32_t s_nextPainCheck = 0;
+            if (coop::IsDue(now, s_nextPainCheck))
+            {
+                s_nextPainCheck = now + 500;
+                if (!game::IsPlayingAnimFile(player, kDownedAnim))
+                    game::PlayAnimFile(player, kDownedAnim);
+            }
             if (coop::IsDue(now, g_nextBleedNotice))
             {
                 g_nextBleedNotice = now + 10000;
@@ -1123,7 +1438,7 @@ namespace
         {
             g_reviving = target;
             g_reviveStart = now;
-            game::Notify(("Reviving " + name + "... keep holding").c_str());
+            g_revivingName = name;
         }
         else if (now - g_reviveStart >= kReviveHoldMs)
         {
@@ -1232,11 +1547,31 @@ namespace
             }
         }
         game::UpdateChatAbove();
-        std::vector<std::pair<TESObjectREFR*, std::string>> friends;
-        if (g_config.friendMarkers && g_coop.InGame())
-            for (const auto& [id, remote] : g_coop.Remotes())
-                if (TESObjectREFR* who = g_standIns.Character(id))
-                    friends.push_back({who, g_coop.NameOf(id)});
+        // Friends' markers; a downed friend's always shows, in red, with the seconds until they bleed out (Alex,
+        // 2026-10-30: to find them; counted from when we heard they went down).
+        static std::map<uint8_t, uint32_t> s_downedSince;
+        uint32_t now = GetTickCount();
+        std::vector<game::FriendMark> friends;
+        for (const auto& [id, remote] : g_coop.InGame() ? g_coop.Remotes() : std::map<uint8_t, coop::RemotePlayer>())
+        {
+            if (!remote.Downed())
+                s_downedSince.erase(id);
+            else if (!s_downedSince.count(id))
+                s_downedSince[id] = now;
+            TESObjectREFR* who = g_standIns.Character(id);
+            if (!who || g_cutscene || (!g_config.friendMarkers && !remote.Downed()))
+                continue;  // (none in a cutscene: their characters are hidden then)
+            if (!remote.Downed())
+            {
+                friends.push_back({who, g_coop.NameOf(id), false});
+                continue;
+            }
+            uint32_t gone = now - s_downedSince[id];
+            uint32_t left = gone < coop::kBleedOutMs ? (coop::kBleedOutMs - gone + 999) / 1000 : 0;
+            friends.push_back({who, g_coop.NameOf(id) + "\nDOWNED " + std::to_string(left) + "s", true});
+        }
+        if (!g_coop.InGame())
+            s_downedSince.clear();
         game::ShowFriendMarkers(friends);
     }
 
@@ -1769,7 +2104,7 @@ namespace
             line.pop_back();
         while (!line.empty() && line.front() == ' ')
             line.erase(line.begin());
-        LOG_INFO("Lab: %s", line.c_str());
+        LOG_INFO("Lab: %s", _strnicmp(line.c_str(), "typeaddress ", 12) == 0 ? "typeaddress (hidden)" : line.c_str());
         if (line.empty())
             return "empty line";
         if (_stricmp(line.c_str(), "status") == 0)
@@ -1842,6 +2177,78 @@ namespace
             game::DropQuestion(kJoinQuestion);
             AnswerJoinAsk(line == "approve yes");
             return "answered";
+        }
+        if (line == "sit" || _strnicmp(line.c_str(), "sit ", 4) == 0)  // our player (or that actor) sits nearby
+        {
+            TESObjectREFR* who = line == "sit" ? game::Player() :
+                game::LookupRef(static_cast<uint32_t>(std::strtoul(line.c_str() + 4, nullptr, 16)));
+            if (!who || !g_worldLoaded)
+                return "no such actor";
+            TESObjectREFR* chair = game::SitInNearestChair(who);
+            char out[96];
+            std::snprintf(out, sizeof(out), "furniture %08X %s", chair ? game::RefId(chair) : 0,
+                chair ? game::Name(chair) : "(none near)");
+            return out;
+        }
+        if (line == "teleporter")  // uses the teleporter item, as from the Pip-Boy
+        {
+            TESForm* item = game::TeleporterItem();
+            if (!item || !g_coop.InGame() || !game::Player())
+                return "no teleporter";
+            game::ChangeItem(game::Player(), item->refID, -1);
+            return "used";
+        }
+        if (line.size() == 10 && line.compare(0, 9, "teleport ") == 0 && line[9] >= '0' && line[9] <= '9')
+        {
+            // Answers the teleporter's box: a button (go to, bring here, per player; Cancel is the last).
+            if (!g_teleportAsked)
+                return "nothing to pick";
+            g_teleportAsked = false;
+            game::DropQuestion(kTeleportQuestion);
+            size_t choice = static_cast<size_t>(line[9] - '0');
+            if (choice >= g_teleportChoices.size())
+                return "cancelled";
+            auto [who, bring] = g_teleportChoices[choice];
+            g_coop.AskTeleport(bring ? who : g_coop.MyPlayerId(), bring ? g_coop.MyPlayerId() : who);
+            return std::string(bring ? "bringing " : "going to ") + g_coop.NameOf(who);
+        }
+        if (_strnicmp(line.c_str(), "typeaddress ", 12) == 0)  // types into the address box, then Enter
+        {
+            if (!g_typingAddress)
+                return "no address box";
+            game::TypeIntoEntry(line.substr(12));
+            return "typed";
+        }
+        if (line.size() == 6 && line.compare(0, 5, "pick ") == 0 && line[5] >= '0' && line[5] <= '9' &&
+            (g_askedHowToJoin || g_askedHostWho))
+        {
+            // Answers "Join how?" or "Who can join your game?": a button (Cancel is the last).
+            int id = g_askedHowToJoin ? kJoinHowQuestion : kHostWhoQuestion;
+            game::DropQuestion(id);
+            int choice = line[5] - '0';
+            if (id == kHostWhoQuestion)
+            {
+                g_askedHostWho = false;
+                if (choice > 1)
+                    return "cancelled";
+                HostFor(choice == 1);
+                return choice == 1 ? "hosting, by IP too" : "hosting";
+            }
+            g_askedHowToJoin = false;
+            if (choice >= static_cast<int>(g_howChoices.size()))
+                return "cancelled";
+            switch (g_howChoices[choice])
+            {
+            case JoinHow::SteamFriend: JoinSteamFriend(); return "Steam friends";
+            case JoinHow::TypeAddress: StartAddressEntry(); return "address box";
+            case JoinHow::LastAddress:
+                JoinHost({0, g_config.joinAddress, "the host by IP", g_config.joinPort});
+                return "picked the last IP address";
+            case JoinHow::LanCoop:
+                JoinHost({0, g_config.address, g_config.address + " (LanCoop)"});
+                return "picked " + g_config.address + " (LanCoop)";
+            }
+            return "cancelled";
         }
         if (line.size() == 6 && line.compare(0, 5, "pick ") == 0 && line[5] >= '0' && line[5] <= '9')
         {
@@ -2219,6 +2626,19 @@ namespace
         me.moves = game::MovementFlags(game::Player());
         if (game::IsJumping(game::Player()))
             me.moves |= coop::moves::kJump;
+        // Our speed and the animations mods give us (Alex, 2026-10-30: a sprint mod's run, faster), for our character in
+        // the others' games; read ten times a second.
+        static uint32_t s_nextModAnimLook = 0;
+        static uint16_t s_runSpeed = 0;
+        if (coop::IsDue(now, s_nextModAnimLook))
+        {
+            s_nextModAnimLook = now + 100;
+            float run = game::CachedRunSpeed(game::Player());
+            if (run > 0)
+                s_runSpeed = static_cast<uint16_t>(run < 65535 ? run + 0.5f : 65535);
+            g_coop.SetMyModAnims(game::ModAnimFiles(game::Player()));
+        }
+        me.runSpeed = s_runSpeed;
         g_coop.SetMyPose(me);
         if (g_coop.InGame())
             FollowGroup(now);
@@ -2279,9 +2699,17 @@ namespace
         for (const coop::AttackReport& attack : g_coop.TakeAttacks())
             g_standIns.Attack(attack.playerId, attack.shots, attack.release);
         if (g_coop.InGame())
-            g_standIns.Update(g_coop, now, me);
+        {
+            // A cutscene: a script has our movement locked (DisablePlayerControls); our own downed and waiting lock it
+            // too, but aren't one.
+            g_cutscene = (game::PlayerDisabledControls() & 1) && !g_downed && !g_waitForHostLoad;
+            g_standIns.Update(g_coop, now, me, g_cutscene);
+        }
         else
+        {
+            g_cutscene = false;
             g_standIns.RemoveAll();
+        }
         g_partClock.Done(kPartPlayers);
         if (g_coop.GetRole() == coop::Role::Host)
             g_npcs.Share(g_coop, now, me, g_standIns);
@@ -2371,7 +2799,10 @@ namespace
         else if (g_coop.GetRole() == coop::Role::Host)
             ServeFriendSaves();
         g_progress.Update(g_coop, now);
+        Teleporter(now);
+        ShareFurnitureAnim(now);
         UpdateDowned(now, me, s_health, s_maxHealth, healthFresh);
+        UpdateReviveBar(now);
 
         // The characters we made, noted in the game (it keeps them in saves) whenever they change.
         if (coop::IsDue(now, g_nextMadeCheck))
@@ -2616,14 +3047,22 @@ namespace
                 "NO: the game can run out of memory and crash");
             g_warnNoLargeAddress = !a.large;
             // Needed by everyone in the game (DESIGN: requirements).
-            for (const wchar_t* dll : {L"jip_nvse.dll", L"kNVSE.dll", L"RealTimeMenus.dll"})
+            const std::pair<const wchar_t*, const char*> kNeeded[] = {{L"jip_nvse.dll", "JIP LN NVSE"},
+                {L"kNVSE.dll", "kNVSE"}, {L"RealTimeMenus.dll", "Real Time Menus"}};
+            for (const auto& [dll, name] : kNeeded)
                 if (GetModuleHandleW(dll))
                     LOG_INFO("Found %ls", dll);
                 else
+                {
                     LOG_ERROR("%ls is missing: install it (JIP LN NVSE, kNVSE and Real Time Menus are needed for "
                         "co-op)", dll);
+                    g_missingPlugins += std::string(g_missingPlugins.empty() ? "" : ", ") + name;
+                }
+            if (!g_missingPlugins.empty() && g_config.mode != Config::Mode::Off)
+                PluginsMissing();  // (said at the main menu, before anyone tries)
             CheckRealTimeMenus();
-            if (g_config.mode != Config::Mode::Off && !game::AddCoopToMainMenu(&HostClicked, &JoinClicked))
+            if (g_config.mode != Config::Mode::Off && !game::AddCoopToMainMenu(&HostClicked, &JoinClicked,
+                    &AddressClicked))
                 LOG_WARN("Main menu: couldn't add Host Co-op and Join Co-op (another plugin changed it?)");
             g_dialogue.Install(g_coop, g_npcs, g_progress);
             g_sleepWait.Install(g_coop);

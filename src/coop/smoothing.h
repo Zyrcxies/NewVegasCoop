@@ -18,6 +18,7 @@ namespace coop
         uint8_t flags = 0;   // kWeaponOut | kSneaking
         uint16_t moves = 0;  // the game's movement flags (coop::moves): which way and how they move; 0: not sent
         float pitch = 0;     // radians, looking down (+) or up (-); players only
+        uint16_t runSpeed = 0;  // players: their running speed now (game units a second; a sprint mod raises it), 0 unknown
 
         static constexpr uint8_t kWeaponOut = 0x01;
         static constexpr uint8_t kSneaking = 0x02;
@@ -27,7 +28,9 @@ namespace coop
     class Smoother
     {
     public:
-        static constexpr uint32_t kDelayMs = 100;
+        // (Halved from 100, 2026-10-30: a friend's character was 250-340 ms behind them; puppets steer smoothly
+        // anyway.)
+        static constexpr uint32_t kDelayMs = 50;
 
         // senderMs: the sender's clock when the pose was taken. localMs: our clock now.
         // Updates older than the newest one are ignored (they arrived out of order).
@@ -35,6 +38,14 @@ namespace coop
 
         // Where to show them at localMs. False until the first update arrives.
         bool Sample(uint32_t localMs, Pose& out) const;
+        // The newest update (where they really are, as far as we know). False until the first arrives.
+        bool Newest(Pose& out) const
+        {
+            if (m_count == 0)
+                return false;
+            out = m_snaps[m_count - 1].pose;
+            return true;
+        }
 
         void Clear() { m_count = 0; m_hasOffset = false; }
 

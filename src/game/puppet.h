@@ -24,7 +24,8 @@ namespace game
         void Release(TESObjectREFR* actor);  // give its legs back to its AI (stopping, or downed)
         // Every frame. want: where they are and what they do (smoothed; moves has coop::moves::kJump while they jump).
         // The actor must be loaded and in the same place as want (otherwise fetch it there first).
-        void Update(TESObjectREFR* actor, const coop::Pose& want, uint32_t now);
+        // latest (optional): their newest known pose, to measure how far behind it the puppet is.
+        void Update(TESObjectREFR* actor, const coop::Pose& want, uint32_t now, const coop::Pose* latest = nullptr);
         void SetGear(TESObjectREFR* actor, const std::vector<uint32_t>& gear);  // base ids they have equipped
         void Attack(TESObjectREFR* actor, uint8_t shots, bool release = false);  // they shot, swung or threw
 
@@ -53,5 +54,12 @@ namespace game
         uint32_t m_frames = 0, m_snaps = 0, m_lagMax = 0, m_lagCount = 0, m_lagSum = 0, m_jumps = 0;
         // Frames where last frame's ask was switched off, replaced with other moves, or not used (out of checked).
         uint32_t m_checked = 0, m_switchedOff = 0, m_replaced = 0, m_ignored = 0;
+        // How far behind their newest pose it is while they move (ms), and how often its gait (stop, walk, run)
+        // changed (Alex, 2026-10-30: delay, jitter and sliding).
+        uint32_t m_behindSum = 0, m_behindMax = 0, m_behindCount = 0, m_gaitChanges = 0, m_speedChanges = 0;
+        bool m_wasMoving = false, m_wasRunning = false;
+        int m_speedMult = 100;  // what its speed is set to (catching up: Alex, 2026-10-30)
+        uint32_t m_speedSetAt = 0;
+        float m_ownRunSpeed = 0;  // its running speed at 100% (from the game's cached value), 0 not known yet
     };
 }

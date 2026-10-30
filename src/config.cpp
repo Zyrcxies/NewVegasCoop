@@ -1,4 +1,6 @@
 #include "config.h"
+#include "log.h"
+#include "net/session.h"
 #include <cstdlib>
 
 #include <cstdlib>
@@ -160,6 +162,11 @@ Config Config::Load(const std::string& iniPath)
     c.allowSecondCopy = Read(iniPath, "AllowSecondCopy", "0") == "1";
     c.autoApproveJoins = Read(iniPath, "AutoApproveJoins", "0") == "1";
     c.lanCoop = Read(iniPath, "LanCoop", "0") == "1";
+    c.ipHosting = Read(iniPath, "IpHosting", "0") == "1";
+    std::string joinAddress = Read(iniPath, "JoinAddress", "");
+    c.joinPort = c.port;
+    if (!joinAddress.empty() && !net::ParseHostAddress(joinAddress, c.joinAddress, c.joinPort))
+        LOG_WARN("NVCoop.ini: JoinAddress isn't an address (an IP like 203.0.113.5, or 203.0.113.5:27960)");
     c.secondCopyWaits = Read(iniPath, "SecondCopyWaits", "0") == "1";
     c.blockDiscordOverlay = Read(iniPath, "BlockDiscordOverlay", "1") != "0";
     c.borderless = Read(iniPath, "Borderless", "1") != "0";

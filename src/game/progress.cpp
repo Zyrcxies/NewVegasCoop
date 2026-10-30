@@ -16,6 +16,7 @@ namespace game
         constexpr uint32_t kReputationLookMs = 1000;    // host: reputations checked for changes
         constexpr uint32_t kReputationResendMs = 10000; // host: all of them again
         constexpr uint32_t kQuietAfterJoinMs = 10000;
+        constexpr uint32_t kTravelLookMs = 2000;        // fast travel: our map markers checked
     }
 
     void Progress::Update(coop::Coop& coop, uint32_t now)
@@ -27,7 +28,9 @@ namespace game
                 m_watcher.Forget();
                 m_sentReputations.clear();
                 m_reputationWatcher.Forget();
+                m_travelWatcher.Forget();
                 m_joins = 0;
+                m_travelJoins = 0;
             }
             m_wasInGame = false;
             return;
@@ -80,6 +83,7 @@ namespace game
             }
         }
         Reputations(coop, now, host);
+        Travel(coop, now, host);
 
         if (coop::IsDue(now, m_nextLog))
         {
@@ -90,6 +94,59 @@ namespace game
             m_sharedXp = m_gotXp = 0;
             m_reputationsSet = 0;
         }
+    }
+
+    void Progress::Travel(coop::Coop& coop, uint32_t now, bool host)
+    {
+        if (m_mapMarkers.empty())
+        {
+            m_mapMarkers = MapMarkers();
+            LOG_INFO("Progress: %zu map markers", m_mapMarkers.size());
+        }
+        // Others' places first (so they aren't sent back as ours).
+        std::vector<uint32_t> heard = coop.TakeTravelMarkers();
+        std::vector<uint32_t> relay;
+        std::string lastName;
+        uint32_t unlocked = 0;
+        for (uint32_t id : heard)
+        {
+            TESObjectREFR* marker = LookupRef(id);
+            if (!marker || std::find(m_mapMarkers.begin(), m_mapMarkers.end(), marker) == m_mapMarkers.end())
+                continue;  // not a map marker (only those are unlocked)
+            if (m_travelWatcher.Look(id))
+                relay.push_back(id);  // host: a friend's find, to the others
+            if (CanTravelTo(marker))
+                continue;
+            UnlockTravel(marker);
+            ++unlocked;
+            lastName = MarkerName(marker);
+            LOG_INFO("Progress: fast travel to %08X %s unlocked (someone else found it)", id, lastName.c_str());
+        }
+        if (host && !relay.empty())
+            coop.ShareTravelMarkers(relay);
+        if (unlocked == 1 && !lastName.empty())
+            Notify(("Fast travel unlocked: " + lastName).c_str());
+        else if (unlocked > 1)
+            Notify(("Co-op: " + std::to_string(unlocked) + " places unlocked for fast travel").c_str());
+
+        if (!coop::IsDue(now, m_nextTravelLook))
+            return;
+        m_nextTravelLook = now + kTravelLookMs;
+        // Someone new joined: the host tells them every place (friends tell theirs on their first look).
+        if (host && coop.Joins() != m_travelJoins)
+        {
+            m_travelJoins = coop.Joins();
+            m_travelWatcher.Forget();
+        }
+        std::vector<uint32_t> mine;
+        for (TESObjectREFR* marker : m_mapMarkers)
+            if (CanTravelTo(marker) && m_travelWatcher.Look(RefId(marker)))
+                mine.push_back(RefId(marker));
+        if (mine.empty())
+            return;
+        coop.ShareTravelMarkers(mine);
+        LOG_INFO("Progress: told the %s about %zu places we can fast travel to (%zu known)", host ? "friends" :
+            "host", mine.size(), m_travelWatcher.Known());
     }
 
     void Progress::Reputations(coop::Coop& coop, uint32_t now, bool host)

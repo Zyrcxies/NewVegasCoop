@@ -137,6 +137,16 @@ namespace dev
                 if (a.anims[i] != b.anims[i])
                     out.push_back(Format("animation layer %d: ", i) + AnimText(b.anims[i], animName) +
                         " (was " + AnimText(a.anims[i], animName) + ")");
+        if (std::fabs(a.walkSpeed - b.walkSpeed) > 0.01f || std::fabs(a.runSpeed - b.runSpeed) > 0.01f)
+            out.push_back(Format("cached walk speed %.2f, run speed %.2f (was %.2f, %.2f)", b.walkSpeed, b.runSpeed,
+                a.walkSpeed, a.runSpeed));
+        if (a.lockedControls != b.lockedControls)
+            out.push_back(Format("locked controls %02X (was %02X)", b.lockedControls, a.lockedControls));
+        if (a.idle != b.idle)
+            out.push_back(Format("idle animation %08X (was %08X)", b.idle, a.idle));
+        for (int i = 0; i < kAnimLayers; ++i)
+            if (a.sequences[i] != b.sequences[i])
+                out.push_back(Format("layer %d plays ", i) + b.sequences[i] + " (was " + a.sequences[i] + ")");
         return out;
     }
 

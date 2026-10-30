@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace game
 {
@@ -18,6 +19,13 @@ namespace game
         constexpr float kPutBackDistance = 200;   // further off than this: put it back where it should be
         constexpr float kTurnAtLeast = 0.01f;     // radians
         constexpr uint32_t kPutBackPauseMs = 300; // a put-back shows up a frame or two later: don't repeat it
+        // Catching up (Alex, 2026-10-30: it ran as fast as they did, so stayed 340 ms behind while they ran): its speed
+        // goes up 20% for each 100 ms it's behind their newest position (the way they move), down when ahead, within
+        // these, set again when it changes this much (at most every kSpeedEveryMs). The game plays its walk and run
+        // faster too: no sliding. (By time, not distance: at walking pace 200 ms is only 20 units.)
+        constexpr int kSpeedMultMin = 75, kSpeedMultMax = 135, kSpeedMultStep = 5;
+        constexpr float kSpeedPerSecondBehind = 200;
+        constexpr uint32_t kSpeedEveryMs = 150;
         constexpr float kPi = 3.14159265f;
         // Movement flags copied: direction, turning, walk/run/sneak/swim, jump/fly/fall/slide. Not
         // "Keyboard" (0x40): it says how the PLAYER is controlled.
@@ -48,9 +56,12 @@ namespace game
             ReleaseMovementFlags(actor);
         m_asked = 0;
         m_waiting = false;
+        if (actor && m_speedMult != 100)
+            SetSpeedMult(actor, 100);
+        m_speedMult = 100;
     }
 
-    void Puppet::Update(TESObjectREFR* actor, const coop::Pose& want, uint32_t now)
+    void Puppet::Update(TESObjectREFR* actor, const coop::Pose& want, uint32_t now, const coop::Pose* latest)
     {
         coop::Pose at;
         if (!actor || !GetPose(actor, at))
@@ -68,10 +79,54 @@ namespace game
         m_lastWantAt = now;
 
         // Legs: steered onto the spot, and held so its AI can't take them back. (A game that doesn't
-        // send movement flags, like the fake friend's, still says whether they sneak.)
-        uint32_t theirs = (want.moves & kCopiedFlags) | ((want.flags & coop::Pose::kSneaking) ? coop::moves::kSneaking : 0);
+        // send movement flags, like the fake friend's, still says whether they sneak.) What they do (start, stop, jump,
+        // draw) is taken from their newest pose, not the smoothed one, which lags 50 ms (Alex, 2026-10-30: delay).
+        const coop::Pose& doing = latest && latest->space == at.space ? *latest : want;
+        uint32_t theirs = (doing.moves & kCopiedFlags) | ((doing.flags & coop::Pose::kSneaking) ? coop::moves::kSneaking : 0);
         coop::Steer::Input in{at.x, at.y, want.x, want.y, m_wantVx, m_wantVy, want.heading, theirs};
         uint32_t flags = m_steer.Flags(in);
+        if (m_steer.Moving() != m_wasMoving || (m_steer.Moving() && m_steer.Running() != m_wasRunning))
+            ++m_gaitChanges;
+        m_wasMoving = m_steer.Moving();
+        m_wasRunning = m_steer.Running();
+        // Behind them: the distance to their newest pose, in time at the speed they move (only while moving).
+        float speed = std::sqrt(m_wantVx * m_wantVx + m_wantVy * m_wantVy);
+        // Their own speed is the base (a sprint mod raises it: Enhanced Movement's sprint is +80%, a drawn rifle -18%):
+        // their running speed against its own at 100%, caught up around it.
+        if (float run = CachedRunSpeed(actor); run > 0 && m_speedMult > 0)
+            m_ownRunSpeed = run * 100.0f / static_cast<float>(m_speedMult);
+        int base = 100;
+        if (doing.runSpeed && m_ownRunSpeed > 0)
+        {
+            base = static_cast<int>(doing.runSpeed * 100.0f / m_ownRunSpeed + 0.5f);
+            base = base < 30 ? 30 : base > 300 ? 300 : base;
+        }
+        int mult = base;
+        if (m_steer.Moving() && speed > 30)
+        {
+            const coop::Pose& target = latest && latest->space == at.space ? *latest : want;
+            float along = ((target.x - at.x) * m_wantVx + (target.y - at.y) * m_wantVy) / speed;  // + behind
+            int catchUp = 100 + static_cast<int>(along / speed * kSpeedPerSecondBehind);
+            catchUp = catchUp < kSpeedMultMin ? kSpeedMultMin : catchUp > kSpeedMultMax ? kSpeedMultMax : catchUp;
+            mult = base * catchUp / 100;
+        }
+        if ((std::abs(mult - m_speedMult) >= kSpeedMultStep && now - m_speedSetAt >= kSpeedEveryMs) ||
+            (mult == base && m_speedMult != base))
+        {
+            SetSpeedMult(actor, mult);
+            m_speedMult = mult;
+            m_speedSetAt = now;
+            ++m_speedChanges;
+        }
+        if (latest && latest->space == at.space && speed > 60)
+        {
+            float bx = latest->x - at.x, by = latest->y - at.y;
+            uint32_t behind = static_cast<uint32_t>(std::sqrt(bx * bx + by * by) / speed * 1000.0f);
+            behind = behind > 2000 ? 2000 : behind;
+            m_behindSum += behind;
+            m_behindMax = behind > m_behindMax ? behind : m_behindMax;
+            ++m_behindCount;
+        }
         // What became of last frame's ask: a real NPC's AI can fight the legs (step 5 lab: a farmer and a
         // shopkeeper wouldn't follow, Doc Mitchell did).
         if (m_asked)
@@ -104,7 +159,7 @@ namespace game
                     dev::MoveFlagNames(flags).c_str());
         }
 
-        bool jumping = (want.moves & coop::moves::kJump) != 0;
+        bool jumping = (doing.moves & coop::moves::kJump) != 0;
         if (jumping && !m_jumping)
         {
             ++m_jumps;
@@ -112,7 +167,7 @@ namespace game
                 LOG_INFO("%s: couldn't jump (no physics controller)", m_who.c_str());
         }
         m_jumping = jumping;
-        UpdateWeaponOut(actor, (want.flags & coop::Pose::kWeaponOut) != 0, now);
+        UpdateWeaponOut(actor, (doing.flags & coop::Pose::kWeaponOut) != 0, now);
         if (std::fabs(AngleDiff(at.heading, want.heading)) > kTurnAtLeast)
             Turn(actor, want.heading);
 
@@ -226,11 +281,15 @@ namespace game
         LOG_INFO("%s: off by %.0f on average (most %.0f) units; put back %u times; jumped %u times; legs took %u ms "
             "on average (most %u) for %u changes", m_who.c_str(), m_errorSum / m_frames, m_errorMax, m_snaps, m_jumps,
             m_lagCount ? m_lagSum / m_lagCount : 0, m_lagMax, m_lagCount);
+        LOG_INFO("%s: %u ms behind their newest position on average (most %u) while moving; gait changed %u times; "
+            "speed set %u times (now %d%%)", m_who.c_str(), m_behindCount ? m_behindSum / m_behindCount : 0, m_behindMax,
+            m_gaitChanges, m_speedChanges, m_speedMult);
         if (m_switchedOff || m_replaced || m_ignored)
             LOG_INFO("%s: its AI switched our legs off %u times, replaced our moves %u times, and the game didn't "
                 "use them %u times, in %u frames", m_who.c_str(), m_switchedOff, m_replaced, m_ignored, m_checked);
         m_errorSum = m_errorMax = 0;
         m_frames = m_snaps = m_lagMax = m_lagCount = m_lagSum = m_jumps = 0;
         m_checked = m_switchedOff = m_replaced = m_ignored = 0;
+        m_behindSum = m_behindMax = m_behindCount = m_gaitChanges = m_speedChanges = 0;
     }
 }

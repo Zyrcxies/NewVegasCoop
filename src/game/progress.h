@@ -2,6 +2,7 @@
 
 // Shared XP, karma and faction reputation (step 7.2). XP and karma: what any player gains, everyone gains (the game's
 // own way, with its sound and messages). Reputation is the host's world: friends' fame and infamy are set to it.
+// Fast travel: a place anyone can travel to, everyone can.
 
 #include "coop/coop.h"
 #include "coop/progress.h"
@@ -9,6 +10,9 @@
 #include <cstdint>
 #include <map>
 #include <utility>
+#include <vector>
+
+class TESObjectREFR;
 
 namespace game
 {
@@ -16,14 +20,18 @@ namespace game
     {
     public:
         void Update(coop::Coop& coop, uint32_t now);  // every frame
-        void Forget() { m_watcher.Forget(); m_reputationWatcher.Forget(); }  // a save is loading
+        void Forget() { m_watcher.Forget(); m_reputationWatcher.Forget(); m_travelWatcher.Forget(); }  // a save loads
         // Our player just gained this in a way that mustn't be shared as usual (a conversation's line: step 7.4).
         void Expect(int32_t xp, int32_t karma) { m_watcher.Expect(xp, karma); }
 
     private:
         void Reputations(coop::Coop& coop, uint32_t now, bool host);
+        void Travel(coop::Coop& coop, uint32_t now, bool host);
         coop::ProgressWatcher m_watcher;
         coop::ReputationWatcher m_reputationWatcher;  // friend: our own game's reputation changes
+        coop::TravelWatcher m_travelWatcher;
+        std::vector<TESObjectREFR*> m_mapMarkers;  // every map marker (read once)
+        uint32_t m_nextTravelLook = 0, m_travelJoins = 0;
         uint32_t m_nextLook = 0, m_nextReputationLook = 0, m_nextReputationResend = 0;
         std::map<uint32_t, std::pair<float, float>> m_sentReputations;  // host: as last sent, by form
         uint32_t m_joins = 0;

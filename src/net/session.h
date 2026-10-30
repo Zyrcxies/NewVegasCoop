@@ -16,11 +16,19 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 struct _ENetHost;
 
 namespace net
 {
+    // A host's address as a player types it (Alex, 2026-10-30: joining by IP, for port forwarding or a VPN):
+    // "203.0.113.5", "100.64.1.2:27961" or a host name, then optionally :port (1 to 65535). False if it isn't one
+    // (spaces around it are fine); port is left alone when none is given.
+    bool ParseHostAddress(const std::string& text, std::string& host, uint16_t& port);
+    // This PC's IPv4 addresses (not 127.x), to tell a host what friends can join (a VPN's too).
+    std::vector<std::string> LocalAddresses();
+
     class Session : public Transport
     {
     public:

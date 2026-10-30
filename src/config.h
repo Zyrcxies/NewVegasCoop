@@ -42,6 +42,11 @@ struct Config
     bool skipDlcPopups = true;        // the DLCs' and packs' intro popups out of Doc Mitchell's house skipped
     bool labChannel = false;  // developer-only: tools on this PC can run console lines (dev/lab_channel.h)
     bool lanCoop = false;  // developer-only: also host on (and list for Join) the IP connection: Port, Address
+    // Joining by IP (Alex, 2026-10-30: for port forwarding or a free VPN): the host also lets friends join on Port
+    // (IpHosting=1; the host still lets each one in), and Join Co-op lists JoinAddress ("ip" or "ip:port").
+    bool ipHosting = false;
+    std::string joinAddress;  // "" none (checked: net::ParseHostAddress)
+    uint16_t joinPort = 0;
     bool autoApproveJoins = false;  // developer-only: everyone who asks to join is let in without asking (labs)
 
     static Config Load(const std::string& iniPath);

@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <map>
+#include <set>
 #include <utility>
 
 namespace coop
@@ -77,5 +78,18 @@ namespace coop
 
     private:
         std::map<uint32_t, std::pair<float, float>> m_known;
+    };
+
+    // Fast travel (Alex, 2026-10-30): a place anyone can travel to, everyone can. Which map markers others know of.
+    class TravelWatcher
+    {
+    public:
+        bool Look(uint32_t marker) { return m_known.insert(marker).second; }  // ours: true if others don't know yet
+        void Heard(uint32_t marker) { m_known.insert(marker); }  // someone else's (now ours too)
+        void Forget() { m_known.clear(); }  // a save is loading, or a new session: tell everything again
+        size_t Known() const { return m_known.size(); }
+
+    private:
+        std::set<uint32_t> m_known;
     };
 }

@@ -26,6 +26,10 @@ namespace coop
         static constexpr float kStartAbove = 40, kStopBelow = 20;  // moving at all (with a gap: no flicker)
         static constexpr float kRunAbove = 220, kWalkBelow = 180;  // the game's walk is ~90, its run ~340
         static constexpr float kPull = 2.0f;  // per second: 100 units off adds 200 units/s towards the spot
+        // With their own movement flags (Alex, 2026-10-30: guessed from speed, the gait flipped between walk, run and
+        // stop up to 22 times in 10 s): it moves when they do, at their gait. Standing, it walks back onto its spot only
+        // when this far off it (with a gap: no flicker); walking, it runs to catch up when this far behind.
+        static constexpr float kStartOff = 40, kStopOff = 15, kCatchUpRun = 120;
 
         struct Input
         {
@@ -37,6 +41,8 @@ namespace coop
         };
 
         uint32_t Flags(const Input& in);  // call every frame
+        bool Moving() const { return m_moving; }
+        bool Running() const { return m_running; }
 
     private:
         bool m_moving = false, m_running = false;

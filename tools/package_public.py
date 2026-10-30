@@ -10,6 +10,7 @@ ZIP = os.path.join(ROOT, 'build', f'New Vegas Co-op {version}.zip')
 INI = '''[Coop]
 ; menu: Host Co-op and Join Co-op on the main menu
 Mode=menu
+; The port joining by IP uses (UDP). Hosting by IP and the address to join are picked in the main menu.
 Port=27960
 ; When hosting: quest mods whose quests your game runs for everyone (file names, commas between)
 HostQuestMods=
@@ -42,9 +43,19 @@ Start the game with nvse_loader.exe (or your mod manager), with Steam open.
 How to start a game
 Host: main menu > Host Co-op > load a save, or start a new game (pick Quick start). A new save asks for its mode
 once (Normal or Co-op balanced, friendly fire or not). Friends can join once you're outside Doc Mitchell's house.
-Friends: main menu > Join Co-op > the host's name (a Steam friend); the host lets you in. The first time, pick the
+Friends: main menu > Join Co-op > A Steam friend's game > the host's name; the host lets you in. The first time, pick the
 character to bring (a save, or a new game). After that, Join loads the right save by itself.
 Later sessions: the host loads the group's last save with Host Co-op; friends just click Join Co-op.
+
+Joining by IP (without Steam friends)
+Co-op normally goes through Steam (friends only, nothing to set up). To join by IP address instead:
+- Host: Host Co-op > "Steam friends, and by IP address". Then either forward UDP port 27960 on the router to your
+  PC, or everyone installs the same free VPN (Tailscale, ZeroTier or Radmin VPN). Your addresses are in the pause
+  menu > Co-op Address (they're never shown on their own: safe for streaming).
+- Friends: Join Co-op > By IP address, and type the host's address (the router's public IP when port forwarding,
+  or the host's VPN address). It shows as stars while typed, and is remembered: next time it's "The last IP
+  address". The host still lets each friend in.
+Copies of the game from outside Steam (GOG, Epic) aren't tested, and voice chat needs Steam.
 
 Playing
 Main menu: Host Co-op, or Join Co-op and pick a friend's game (the host is asked to let you in).

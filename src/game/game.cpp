@@ -131,6 +131,15 @@ namespace game
         Script* g_starterGear = nullptr;  // quick start: Doc's starting gear, by tag skills
         Script* g_effectTrait = nullptr;  // co-op balanced: an item's effect's magnitude or duration (JIP)
         Script* g_loadedOfType = nullptr;
+        Script* g_showMap = nullptr;
+        Script* g_questObject = nullptr;
+        Script* g_itemCount = nullptr;
+        Script* g_sitNearest = nullptr;
+        Script* g_reviveBar = nullptr;
+        Script* g_speedMult = nullptr;
+        Script* g_actorAlpha = nullptr;
+        Script* g_collision = nullptr;
+        TESForm* g_teleporter = nullptr;  // the teleporter item (made once a session)
         Script* g_armorDR = nullptr;
         Script* g_bodyPartLists = nullptr;  // co-op balanced: every body part list (BGSBodyPartData) loaded
         Script* g_bodyPartMult = nullptr;   // co-op balanced: a body part's damage times (JIP)
@@ -675,9 +684,18 @@ namespace game
                 "float fX\n"
                 "float fY\n"
                 "int iShow\n"
-                "Begin Function {sName, fX, fY, iShow}\n"
+                "int iRed\n"
+                "Begin Function {sName, fX, fY, iShow, iRed}\n"
                 "  if iShow == 2\n"
                 "    SetUIStringEx \"" + path + "/string\" \"%z%rv\" sName\n"
+                "    if iRed\n"
+                "      SetUIFloat \"" + path + "/systemcolor\" 0\n"
+                "      SetUIFloat \"" + path + "/red\" 255\n"
+                "      SetUIFloat \"" + path + "/green\" 60\n"
+                "      SetUIFloat \"" + path + "/blue\" 40\n"
+                "    else\n"
+                "      SetUIFloat \"" + path + "/systemcolor\" 1\n"
+                "    endif\n"
                 "  endif\n"
                 "  if iShow\n"
                 "    SetUIFloat \"" + path + "/user0\" fX\n"
@@ -821,6 +839,81 @@ namespace game
             "Begin Function {iType}\n"
             "  let aForms := GetLoadedTypeArray iType\n"
             "  SetFunctionValue aForms\n"
+            "End\n");
+        // Fast travel there unlocked (the game's ShowMap with travel on: as finding it does, minus the XP).
+        g_showMap = Compile("show map",
+            "ref rMarker\n"
+            "Begin Function {rMarker}\n"
+            "  ShowMap rMarker 1\n"
+            "End\n");
+        // The teleporter item can't be dropped, sold or put away (the game's quest item flag on its base).
+        g_questObject = Compile("quest object",
+            "ref rItem\n"
+            "Begin Function {rItem}\n"
+            "  SetQuestObject rItem 1\n"
+            "End\n");
+        g_itemCount = Compile("item count",
+            "ref rItem\n"
+            "int iCount\n"
+            "Begin Function {rItem}\n"
+            "  set iCount to GetItemCount rItem\n"
+            "  SetFunctionValue iCount\n"
+            "End\n");
+        // A friend's character's collision on or off (JIP ToggleObjectCollision: off, a character sinks into a chair as
+        // one sitting does).
+        g_collision = Compile("collision",
+            "int iOn\n"
+            "Begin Function {iOn}\n"
+            "  ToggleObjectCollision iOn\n"
+            "End\n");
+        // An actor's speed (JIP's SetSpeedMult: the SpeedMult actor value, and the game's cached speed recomputed, so
+        // it takes at once; the game plays its walk and run faster or slower to match).
+        g_speedMult = Compile("speed mult",
+            "int iMult\n"
+            "Begin Function {iMult}\n"
+            "  SetSpeedMult iMult\n"
+            "End\n");
+        // A friend's character see-through or not (the game's SetActorAlpha: 0 unseen, 1 as normal).
+        g_actorAlpha = Compile("actor alpha",
+            "float fAlpha\n"
+            "Begin Function {fAlpha}\n"
+            "  SetActorAlpha fAlpha\n"
+            "End\n");
+        // The revive bar's text (JIP's SetUIStringEx; xNVSE's SetUIFloat), a HUD text made in MakeChatHud.
+        g_reviveBar = Compile("revive bar",
+            "string_var sText\n"
+            "int iShow\n"
+            "Begin Function {sText, iShow}\n"
+            "  if iShow\n"
+            "    SetUIStringEx \"HUDMainMenu/NVCoopRevive/string\" \"%z\" sText\n"
+            "  endif\n"
+            "  SetUIFloat \"HUDMainMenu/NVCoopRevive/visible\" iShow\n"
+            "End\n");
+        // Lab: an actor sits in (uses) the nearest furniture (xNVSE GetRefs 39: furniture, this cell and the next).
+        g_sitNearest = Compile("sit nearest",
+            "ref rActor\n"
+            "ref rChair\n"
+            "ref rBest\n"
+            "float fBest\n"
+            "float fDistance\n"
+            "array_var aRefs\n"
+            "int i\n"
+            "Begin Function {rActor}\n"
+            "  let aRefs := GetRefs 39 1\n"
+            "  set fBest to 999999\n"
+            "  while i < ar_Size aRefs\n"
+            "    let rChair := aRefs[i]\n"
+            "    set fDistance to rActor.GetDistance rChair\n"
+            "    if fDistance < fBest\n"
+            "      set fBest to fDistance\n"
+            "      set rBest to rChair\n"
+            "    endif\n"
+            "    set i to i + 1\n"
+            "  loop\n"
+            "  if rBest\n"
+            "    rBest.Activate rActor\n"
+            "  endif\n"
+            "  SetFunctionValue rBest\n"
             "End\n");
         g_armorDR = Compile("armor DR",
             "ref rArmor\n"
@@ -3995,8 +4088,10 @@ namespace game
         bool g_optionsMade = false;
         void (*g_onHost)() = nullptr;
         void (*g_onJoin)() = nullptr;
+        void (*g_onAddress)() = nullptr;
         void __cdecl HostClicked() { if (g_onHost) g_onHost(); }
         void __cdecl JoinClicked() { if (g_onJoin) g_onJoin(); }
+        void __cdecl AddressClicked() { if (g_onAddress) g_onAddress(); }
 
         struct SimpleArray  // BSSimpleArray<StartMenu::Option*>
         {
@@ -4005,13 +4100,14 @@ namespace game
             uint32_t count;
         };
 
-        void* MakeOption(const char* name, void (*clicked)())
+        // flags: where it shows (the game's own: 1 the main menu, 2 the pause menu in game, 3 both).
+        void* MakeOption(const char* name, void (*clicked)(), uint32_t flags = 1)
         {
             void* option = reinterpret_cast<void* (__cdecl*)(size_t)>(addr::kFormHeapAllocate)(0x10);
             if (!option)
                 return nullptr;
             using Init = void*(__thiscall*)(void*, const char*, void (*)(), uint32_t);
-            reinterpret_cast<Init>(addr::kStartMenuOptionInit)(option, name, clicked, 1);  // 1: main menu
+            reinterpret_cast<Init>(addr::kStartMenuOptionInit)(option, name, clicked, flags);
             using Append = int(__thiscall*)(void*, void**);
             reinterpret_cast<Append>(addr::kSimpleArrayAppend)(reinterpret_cast<void*>(addr::kStartMenuOptions), &option);
             return option;
@@ -4047,17 +4143,23 @@ namespace game
             }
             LOG_INFO("Main menu: added Host Co-op and Join Co-op (after option %u of %u)",
                 static_cast<unsigned>(load < before ? load : before), before);
+            if (g_onAddress)
+            {
+                MakeOption("Co-op Address", &AddressClicked, 2);  // (at the end: in game it shows before Quit's group)
+                LOG_INFO("Pause menu: added Co-op Address");
+            }
         }
     }
 
     bool MainMenuMade() { return g_optionsMade; }
 
-    bool AddCoopToMainMenu(void (*onHost)(), void (*onJoin)())
+    bool AddCoopToMainMenu(void (*onHost)(), void (*onJoin)(), void (*onAddress)())
     {
         if (g_makeOptions)
             return true;
         g_onHost = onHost;
         g_onJoin = onJoin;
+        g_onAddress = onAddress;
         g_makeOptions = HookCall(addr::kMakeStartMenuOptionsCall, reinterpret_cast<const void*>(&MakeOptions));
         if (g_makeOptions && g_makeOptions != addr::kMakeStartMenuOptions)
             LOG_INFO("Main menu: another plugin makes its options too (%08X); ours are added after",
@@ -5546,6 +5648,11 @@ namespace game
         HWND g_gameWindow = nullptr;
         WNDPROC g_gameWndProc = nullptr;
         std::vector<int> g_chatKeysOff;   // keys we disabled (main thread)
+        // Typing into a box of ours instead (Alex, 2026-10-30: the host's IP at the main menu, hidden): the same
+        // window messages, its own draft (under g_chatMutex).
+        bool g_entryTyping = false;
+        coop::ChatDraft g_entryDraft;
+        EntryState g_entryState = EntryState::None;
         bool g_chatHudMade = false;
         bool g_chatShown = false;
 
@@ -5554,6 +5661,19 @@ namespace game
             if (message == WM_CHAR || message == WM_KEYDOWN || message == WM_KEYUP || message == WM_SYSCHAR)
             {
                 std::lock_guard<std::mutex> lock(g_chatMutex);
+                if (g_entryTyping)
+                {
+                    if (message == WM_CHAR)
+                    {
+                        coop::ChatDraft::Done done = g_entryDraft.Type(static_cast<unsigned char>(w));
+                        if (done != coop::ChatDraft::Done::No)
+                        {
+                            g_entryTyping = false;
+                            g_entryState = done == coop::ChatDraft::Done::Send ? EntryState::Done : EntryState::Cancelled;
+                        }
+                    }
+                    return 0;  // (typing: the keys are ours)
+                }
                 if (g_chatTyping)
                 {
                     if (message == WM_CHAR)
@@ -5623,6 +5743,14 @@ namespace game
                     "<systemcolor>1</systemcolor><string> </string></text>";
                 g_scripts->CallFunction(g_chatHud, Player(), nullptr, &result, 1, xml.c_str());
             }
+            // The revive bar: under the crosshair, in the HUD's colour.
+            static const char kRevive[] =
+                "<text name=\"NVCoopRevive\"><visible>0</visible>"
+                "<x><copy src=\"screen()\" trait=\"width\"/><div>2</div></x>"
+                "<y><copy src=\"screen()\" trait=\"height\"/><mul>0.58</mul></y>"
+                "<font>2</font><justify>&center;</justify><wrapwidth>900</wrapwidth>"
+                "<systemcolor>1</systemcolor><string> </string></text>";
+            g_scripts->CallFunction(g_chatHud, Player(), nullptr, &result, 1, kRevive);
             // Friends' markers: their name with a chevron under it, higher than a chat line above them.
             for (int slot = 0; slot < kMarkSlots; ++slot)
             {
@@ -5679,6 +5807,72 @@ namespace game
                 g_chatKeysOff.clear();
             }
         }
+    }
+
+    bool StartTextEntry()
+    {
+        if (!HookGameWindow())
+            return false;
+        {
+            std::lock_guard<std::mutex> lock(g_chatMutex);
+            if (g_chatTyping)
+                return false;
+            g_entryDraft = coop::ChatDraft();
+            g_entryTyping = true;
+            g_entryState = EntryState::Typing;
+        }
+        if (g_chatKeysOff.empty())
+            KeepKeysFromGame(true);
+        return true;
+    }
+
+    void StopTextEntry()
+    {
+        bool chat;
+        {
+            std::lock_guard<std::mutex> lock(g_chatMutex);
+            g_entryTyping = false;
+            g_entryDraft = coop::ChatDraft();
+            g_entryState = EntryState::None;
+            chat = g_chatTyping;
+        }
+        if (!chat && !g_chatKeysOff.empty())
+            KeepKeysFromGame(false);
+    }
+
+    EntryState TextEntryState()
+    {
+        std::lock_guard<std::mutex> lock(g_chatMutex);
+        return g_entryState;
+    }
+
+    size_t TextEntryLength()
+    {
+        std::lock_guard<std::mutex> lock(g_chatMutex);
+        return g_entryDraft.Text().size();
+    }
+
+    std::string TakeTextEntry()
+    {
+        std::string text;
+        {
+            std::lock_guard<std::mutex> lock(g_chatMutex);
+            if (g_entryState == EntryState::Done)
+                text = g_entryDraft.Take();
+        }
+        StopTextEntry();
+        return text;
+    }
+
+    void TypeIntoEntry(const std::string& text)
+    {
+        std::lock_guard<std::mutex> lock(g_chatMutex);
+        if (!g_entryTyping)
+            return;
+        for (char c : text)
+            g_entryDraft.Type(static_cast<unsigned char>(c));
+        g_entryTyping = false;
+        g_entryState = EntryState::Done;
     }
 
     bool OpenChat()
@@ -6119,17 +6313,18 @@ namespace game
 
     namespace
     {
-        struct Mark { uint32_t who = 0; std::string name; bool shown = false; };
+        struct Mark { uint32_t who = 0; std::string name; bool downed = false, shown = false; };
         Mark g_marks[kMarkSlots];
     }
 
-    void ShowFriendMarkers(const std::vector<std::pair<TESObjectREFR*, std::string>>& friends)
+    void ShowFriendMarkers(const std::vector<FriendMark>& friends)
     {
         for (int slot = 0; slot < kMarkSlots; ++slot)
         {
             Mark& m = g_marks[slot];
-            TESObjectREFR* who = slot < static_cast<int>(friends.size()) ? friends[slot].first : nullptr;
-            const std::string name = who ? friends[slot].second : std::string();
+            TESObjectREFR* who = slot < static_cast<int>(friends.size()) ? friends[slot].who : nullptr;
+            const std::string name = who ? friends[slot].text : std::string();
+            bool downed = who && friends[slot].downed;
             float x = 0, y = 0;
             bool show = false;
             NVSEArrayVarInterface::Element result;
@@ -6150,13 +6345,14 @@ namespace game
             }
             if (!show && !m.shown)
                 continue;
-            bool changed = !m.shown || m.who != (who ? who->refID : 0) || m.name != name;
+            bool changed = !m.shown || m.who != (who ? who->refID : 0) || m.name != name || m.downed != downed;
             if (Player() && g_mark[slot])
-                g_scripts->CallFunction(g_mark[slot], Player(), nullptr, nullptr, 4, name.empty() ? " " : name.c_str(),
+                g_scripts->CallFunction(g_mark[slot], Player(), nullptr, nullptr, 5, name.empty() ? " " : name.c_str(),
                     *reinterpret_cast<uint32_t*>(&x), *reinterpret_cast<uint32_t*>(&y),
-                    static_cast<uint32_t>(!show ? 0 : changed ? 2 : 1));
+                    static_cast<uint32_t>(!show ? 0 : changed ? 2 : 1), static_cast<uint32_t>(downed ? 1 : 0));
             m.who = show ? who->refID : 0;
             m.name = show ? name : std::string();
+            m.downed = show && downed;
             m.shown = show;
         }
     }
@@ -6218,8 +6414,14 @@ namespace game
             sent = std::move(g_chatSent);
             g_chatSent.clear();
         }
-        if (typing != !g_chatKeysOff.empty() && (typing || !g_chatKeysOff.empty()))
-            KeepKeysFromGame(typing);
+        bool entry;
+        {
+            std::lock_guard<std::mutex> lock(g_chatMutex);
+            entry = g_entryState == EntryState::Typing;
+        }
+        bool keep = typing || entry;
+        if (keep != !g_chatKeysOff.empty() && (keep || !g_chatKeysOff.empty()))
+            KeepKeysFromGame(keep);
         bool show = typing || talking;
         if (changed || show != g_chatShown)
         {
@@ -6279,5 +6481,206 @@ namespace game
     {
         if (g_compiled && target && by)
             g_scripts->CallFunctionAlt(g_hit, Player(), 3, target, by, FloatArg(damage));
+    }
+
+    namespace
+    {
+        const void* MarkerData(const TESObjectREFR* marker);
+    }
+
+    std::vector<TESObjectREFR*> MapMarkers()
+    {
+        // As JIP's GetLoadedTypeArray 301 walks them (every world space's persistent cell), but a world space with no
+        // cell is skipped: JIP's read 0xAC from it and crashed (2026-10-30 lab, jip_nvse.dll+439A3).
+        std::vector<TESObjectREFR*> out;
+        const void* data = *reinterpret_cast<const void* const*>(addr::kDataHandler);
+        if (!data)
+            return out;
+        ForEachIn(static_cast<const char*>(data) + layout::kDataHandlerWorldSpaces, [&](void* world)
+        {
+            const void* cell = At<const void*>(world, layout::kWorldSpaceCell);
+            if (!cell)
+                return;
+            ForEachIn(static_cast<const char*>(cell) + layout::kCellObjects, [&](void* ref)
+            {
+                if (MarkerData(static_cast<TESObjectREFR*>(ref)))
+                    out.push_back(static_cast<TESObjectREFR*>(ref));
+            });
+        });
+        return out;
+    }
+
+    namespace
+    {
+        const void* MarkerData(const TESObjectREFR* marker)
+        {
+            using GetByTypeFn = const void*(__thiscall*)(const void* list, uint8_t type);
+            const void* extra = marker ? reinterpret_cast<GetByTypeFn>(addr::kExtraListGetByType)(
+                &marker->extraDataList, layout::kExtraMapMarker) : nullptr;
+            return extra ? At<const void*>(extra, layout::kMapMarkerData) : nullptr;
+        }
+    }
+
+    bool CanTravelTo(const TESObjectREFR* marker)
+    {
+        const void* data = MarkerData(marker);
+        return data && (At<uint8_t>(data, layout::kMarkerFlags) & layout::kMarkerCanTravel);
+    }
+
+    std::string MarkerName(const TESObjectREFR* marker)
+    {
+        const void* data = MarkerData(marker);
+        const char* name = data ? At<const char*>(data, layout::kMarkerName) : nullptr;
+        return name ? name : "";
+    }
+
+    void UnlockTravel(TESObjectREFR* marker)
+    {
+        if (g_compiled && g_showMap && marker)
+            g_scripts->CallFunctionAlt(g_showMap, Player(), 1, marker);
+    }
+
+    TESForm* TeleporterItem()
+    {
+        if (g_teleporter || !g_compiled || !Player())
+            return g_teleporter;
+        // A copy of a stimpak that isn't kept in saves (given again each session), with no effects.
+        TESForm* original = LookupForm(ids::kStimpak);
+        NVSEArrayVarInterface::Element result;
+        if (!original || original->typeID != kFormType_AlchemyItem ||
+            !g_scripts->CallFunction(g_clone, Player(), nullptr, &result, 1, original))
+            return nullptr;
+        TESForm* copy = result.GetTESForm();
+        if (!copy || copy->typeID != kFormType_AlchemyItem)
+            return nullptr;
+        auto* item = static_cast<AlchemyItem*>(copy);
+        SetName(item->fullName.name, "Co-op Teleporter");
+        // (The copy's first list entry is its own, the rest the stimpak's: cutting the start leaves the stimpak's.)
+        item->effects.list.m_listHead.data = nullptr;
+        item->effects.list.m_listHead.next = nullptr;
+        item->value = 0;
+        if (g_questObject)
+            g_scripts->CallFunctionAlt(g_questObject, Player(), 1, copy);
+        g_teleporter = copy;
+        LOG_INFO("Teleporter: item %08X made (a copy of %08X)", copy->refID, original->refID);
+        return g_teleporter;
+    }
+
+    int ItemCount(TESObjectREFR* ref, TESForm* item)
+    {
+        NVSEArrayVarInterface::Element result;
+        if (!g_itemCount || !ref || !item || !g_scripts->CallFunction(g_itemCount, ref, nullptr, &result, 1, item))
+            return 0;
+        return static_cast<int>(result.GetNumber());
+    }
+
+    void SetRefMapMarker(TESObjectREFR* ref, bool on)
+    {
+        // JIP's AddRefMapMarker / RemoveRefMapMarker, run directly (neither reads parameters; removing only compares
+        // the pointer with its list's, so it's safe for a character the game already deleted). JIP clears its list
+        // when a save loads.
+        static const CommandInfo* add = g_cmdTable ? g_cmdTable->GetByName("AddRefMapMarker") : nullptr;
+        static const CommandInfo* remove = g_cmdTable ? g_cmdTable->GetByName("RemoveRefMapMarker") : nullptr;
+        static bool warned = false;
+        const CommandInfo* cmd = on ? add : remove;
+        if (!cmd || !cmd->execute)
+        {
+            if (!warned)
+                LOG_WARN("Map: no JIP AddRefMapMarker / RemoveRefMapMarker: friends aren't shown on the map");
+            warned = true;
+            return;
+        }
+        if (!ref)
+            return;
+        double result = 0;
+        UInt32 offset = 0;
+        cmd->execute(cmd->params, nullptr, ref, nullptr, nullptr, nullptr, &result, &offset);
+    }
+
+    void SetOnCompass(TESObjectREFR* actor, bool on)
+    {
+        void* player = Player();
+        if (!player || !actor || actor == player)
+            return;
+        if (on)
+        {
+            using SetFn = void(__thiscall*)(void* pc, TESObjectREFR* target, uint8_t hostile, uint8_t hidden);
+            reinterpret_cast<SetFn>(addr::kCompassTargetSet)(player, actor, 0, 0);
+        }
+        else
+        {
+            using RemoveFn = void(__thiscall*)(void* pc, TESObjectREFR* target);
+            reinterpret_cast<RemoveFn>(addr::kCompassTargetRemove)(player, actor);
+        }
+    }
+
+    TESObjectREFR* SitInNearestChair(TESObjectREFR* actor)
+    {
+        NVSEArrayVarInterface::Element result;
+        if (!g_sitNearest || !actor || !g_scripts->CallFunction(g_sitNearest, Player(), nullptr, &result, 1, actor))
+            return nullptr;
+        TESForm* form = result.GetTESForm();
+        return form && form->GetIsReference() ? static_cast<TESObjectREFR*>(form) : nullptr;
+    }
+
+    void PlayAnimFile(TESObjectREFR* actor, const std::string& path)
+    {
+        // kNVSE wants the path under Meshes, without it (the game names a furniture's animation with it).
+        // kNVSE's PlayAnimationPath, as a console line on the actor (in a compiled function with a string variable it
+        // never played: lab 2026-10-30). The path is checked (net::IsAnimPath: no quotes) before it gets here.
+        std::string file = _strnicmp(path.c_str(), "meshes\\", 7) == 0 ? path.substr(7) : path;
+        if (!g_console || !actor || file.empty() || file.find('"') != std::string::npos)
+            return;
+        std::string line = "PlayAnimationPath \"" + file + "\" 0";  // (third person)
+        if (g_console->version >= 3 && g_console->RunScriptLine2)
+            g_console->RunScriptLine2(line.c_str(), actor, true);
+    }
+
+    void SetCollision(TESObjectREFR* actor, bool on)
+    {
+        if (g_compiled && g_collision && actor)
+            g_scripts->CallFunctionAlt(g_collision, actor, 1, static_cast<uint32_t>(on ? 1 : 0));
+    }
+
+    void ShowReviveBar(const std::string& text)
+    {
+        static std::string s_shown;  // what it shows now ("" hidden)
+        if (text == s_shown || !g_reviveBar || !Player())
+            return;
+        MakeChatHud();
+        g_scripts->CallFunction(g_reviveBar, Player(), nullptr, nullptr, 2, text.empty() ? " " : text.c_str(),
+            static_cast<uint32_t>(text.empty() ? 0 : 1));
+        s_shown = text;
+    }
+
+    void SetSpeedMult(TESObjectREFR* actor, int mult)
+    {
+        if (g_compiled && g_speedMult && actor && mult > 0)
+            g_scripts->CallFunctionAlt(g_speedMult, actor, 1, static_cast<uint32_t>(mult));
+    }
+
+
+    void SetAnimOverride(TESObjectREFR* actor, const std::string& path, bool on)
+    {
+        // kNVSE's SetActorAnimationPath on that actor (third person), as a console line (see PlayAnimFile); the path
+        // is checked (net::IsAnimPath: no quotes). kNVSE wants it under Meshes, without it.
+        std::string file = _strnicmp(path.c_str(), "meshes\\", 7) == 0 ? path.substr(7) : path;
+        if (!g_console || !actor || file.empty() || file.find('"') != std::string::npos)
+            return;
+        std::string line = std::string("SetActorAnimationPath 0 ") + (on ? "1" : "0") + " \"" + file + "\"";
+        if (g_console->version >= 3 && g_console->RunScriptLine2)
+            g_console->RunScriptLine2(line.c_str(), actor, true);
+    }
+
+    void SetActorAlpha(TESObjectREFR* actor, float alpha)
+    {
+        if (g_compiled && g_actorAlpha && actor)
+            g_scripts->CallFunctionAlt(g_actorAlpha, actor, 1, FloatArg(alpha));
+    }
+
+    uint8_t PlayerDisabledControls()
+    {
+        const void* player = Player();
+        return player ? At<uint8_t>(player, layout::kPlayerDisabledControls) : 0;
     }
 }

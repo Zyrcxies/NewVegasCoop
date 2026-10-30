@@ -296,7 +296,7 @@ TEST(smoother_blends_where_they_look)
     s.Add(0, coop::Pose{1, 0, 0, 0, 0, 0, 0, 0.2f}, 1000);
     s.Add(100, coop::Pose{1, 0, 0, 0, 0, 0, 0, 0.6f}, 1100);
     coop::Pose out;
-    CHECK(s.Sample(1150, out) && out.pitch > 0.2f && out.pitch < 0.6f);  // part way (it plays a little behind)
+    CHECK(s.Sample(1050 + coop::Smoother::kDelayMs, out) && out.pitch > 0.2f && out.pitch < 0.6f);  // part way (a little behind)
     CHECK(s.Sample(5000, out) && out.pitch == 0.6f);
 }
 
@@ -325,7 +325,7 @@ TEST(smoother_keeps_flags)
     coop::Pose p;
     s.Add(0, {7, 0, 0, 0, 0, coop::Pose::kWeaponOut, 0x201}, 1000);
     s.Add(100, {7, 100, 0, 0, 0, 0}, 1100);
-    CHECK(s.Sample(1150, p) && p.flags == coop::Pose::kWeaponOut && p.moves == 0x201);
+    CHECK(s.Sample(1050 + coop::Smoother::kDelayMs, p) && p.flags == coop::Pose::kWeaponOut && p.moves == 0x201);
     CHECK(s.Sample(5000, p) && p.flags == 0);
 }
 
@@ -349,7 +349,7 @@ TEST(smoother_blends_between_updates)
     // Sender's clock is 1000 behind ours; updates arrive instantly.
     s.Add(0, {7, 0, 0, 0, 0}, 1000);
     s.Add(100, {7, 100, 0, 0, 0}, 1100);
-    CHECK(s.Sample(1150, p) && p.x == 50 && p.space == 7);  // shown 100 ms in the past
+    CHECK(s.Sample(1050 + coop::Smoother::kDelayMs, p) && p.x == 50 && p.space == 7);  // shown kDelayMs in the past
     CHECK(s.Sample(5000, p) && p.x == 100);                  // no newer update: stay put
     CHECK(s.Sample(0, p) && p.x == 0);                       // before the first: first
 }
@@ -361,8 +361,8 @@ TEST(smoother_ignores_old_updates_and_jumps_between_places)
     s.Add(100, {1, 0, 0, 0, 0}, 100);
     s.Add(50, {1, 999, 0, 0, 0}, 110);  // arrived late
     s.Add(200, {2, 100, 0, 0, 0}, 200);
-    CHECK(s.Sample(250, p) && p.x == 0 && p.space == 1);  // no sliding into a different place
-    CHECK(s.Sample(300, p) && p.x == 100 && p.space == 2);
+    CHECK(s.Sample(150 + coop::Smoother::kDelayMs, p) && p.x == 0 && p.space == 1);  // no sliding into a different place
+    CHECK(s.Sample(200 + coop::Smoother::kDelayMs, p) && p.x == 100 && p.space == 2);
 }
 
 TEST(smoother_turns_the_short_way)
@@ -371,7 +371,7 @@ TEST(smoother_turns_the_short_way)
     coop::Pose p;
     s.Add(0, {0, 0, 0, 0, 6.2f}, 0);
     s.Add(100, {0, 0, 0, 0, 0.2f}, 100);
-    CHECK(s.Sample(150, p) && (p.heading > 6.2f || p.heading < 0.2f));
+    CHECK(s.Sample(50 + coop::Smoother::kDelayMs, p) && (p.heading > 6.2f || p.heading < 0.2f));
 }
 
 TEST(gear_round_trip_and_limits)
@@ -1269,8 +1269,27 @@ TEST(puppet_runs_forward_with_its_player)
 {
     coop::Steer steer;
     // Facing north (heading 0: forward is +y); the spot moves north at run speed, and we're on it.
-    uint32_t f = steer.Flags({0, 0, 0, 0, 0, 340, 0, 0x200});
+    uint32_t f = steer.Flags({0, 0, 0, 0, 0, 340, 0, 0x201});
     CHECK(f == (0x200 | 0x1));  // Running Forward
+}
+
+TEST(puppet_moves_at_its_players_own_gait)
+{
+    // Alex, 2026-10-30: guessed from speed (plus the pull back onto the spot), the gait flipped between walk, run
+    // and stop. With their flags it's theirs.
+    coop::Steer walk;
+    // They walk north at 90; the puppet is 70 behind: 90 + 140 pulled would have been a run. It walks.
+    CHECK(walk.Flags({0, 0, 0, 70, 0, 90, 0, 0x101}) == (0x100 | 0x1));
+    coop::Steer behind;
+    CHECK(behind.Flags({0, 0, 0, 150, 0, 90, 0, 0x101}) == (0x200 | 0x1));  // 150 behind: it runs to catch up
+    coop::Steer stop;
+    CHECK(stop.Flags({0, 0, 0, 0, 0, 340, 0, 0x201}) & 0x1);
+    CHECK(!(stop.Flags({0, 0, 0, 10, 0, 0, 0, 0x200}) & 0xF));  // they stopped, 10 off its spot: it stops
+    CHECK(stop.Flags({0, 0, 0, 60, 0, 0, 0, 0x200}) == (0x100 | 0x1));  // 60 off: it walks back onto it
+    CHECK(stop.Flags({0, 0, 0, 20, 0, 0, 0, 0x200}) == (0x100 | 0x1));  // and keeps walking down to 15
+    CHECK(!(stop.Flags({0, 0, 0, 10, 0, 0, 0, 0x200}) & 0xF));
+    coop::Steer wall;
+    CHECK(wall.Flags({0, 0, 0, 0, 0, 0, 0, 0x209}) == (0x200 | 0x1 | 0x8));  // keys held, not moving: their keys
 }
 
 TEST(puppet_strafes_and_backs_up_facing_their_way)
@@ -4530,6 +4549,194 @@ TEST(a_friends_own_reputation_changes_reach_the_host)
         return !heard.empty();
     })));
     CHECK((heard.size() == 1 && heard[0].second == net::ReputationGain{0x104C22, 0, 15}));
+}
+
+TEST(a_place_anyone_can_fast_travel_to_everyone_can)
+{
+    // Alex, 2026-10-30: fast travel points unlock for every character.
+    coop::TravelWatcher w;
+    CHECK(w.Look(0x10C69A));   // ours, not told yet
+    CHECK(!w.Look(0x10C69A));  // told once
+    w.Heard(0x0E1A1B);         // someone else's: not sent back as ours
+    CHECK(!w.Look(0x0E1A1B) && w.Known() == 2);
+    w.Forget();                // a new friend joined, or a save loaded: everything again
+    CHECK(w.Look(0x10C69A));
+
+    MsgType t;
+    std::vector<uint32_t> got;
+    Bytes b = net::EncodeTravelMarkers({0x10C69A, 0x0E1A1B});
+    Reader r(b);
+    CHECK(r.Type(t) && t == MsgType::TravelMarkers && net::DecodeTravelMarkers(r, got) &&
+        got == (std::vector<uint32_t>{0x10C69A, 0x0E1A1B}));
+    Bytes made = net::EncodeTravelMarkers({0xFF000801});  // made while playing: not a map marker from the files
+    Reader rm(made);
+    CHECK(rm.Type(t) && !net::DecodeTravelMarkers(rm, got));
+    Bytes none = net::EncodeTravelMarkers({});
+    Reader rn(none);
+    CHECK(rn.Type(t) && !net::DecodeTravelMarkers(rn, got));
+
+    coop::Coop host, a, b2;
+    CHECK(host.Host(kTestPort, "Host"));
+    CHECK(a.Join("127.0.0.1", kTestPort, "Ann"));
+    CHECK(b2.Join("127.0.0.1", kTestPort, "Bob"));
+    CHECK(RunUntil({&host, &a, &b2}, [&] {
+        return a.GetFriendState() == coop::FriendState::Joined && b2.GetFriendState() == coop::FriendState::Joined;
+    }));
+    a.ShareTravelMarkers({0x10C69A});  // Ann's find reaches the host
+    std::vector<uint32_t> atHost, atBob;
+    CHECK(RunUntil({&host, &a, &b2}, [&] {
+        for (uint32_t m : host.TakeTravelMarkers())
+            atHost.push_back(m);
+        return !atHost.empty();
+    }));
+    CHECK(atHost == std::vector<uint32_t>{0x10C69A});
+    host.ShareTravelMarkers(atHost);  // the host passes it on
+    CHECK(RunUntil({&host, &a, &b2}, [&] {
+        for (uint32_t m : b2.TakeTravelMarkers())
+            atBob.push_back(m);
+        return !atBob.empty();
+    }));
+    CHECK(atBob == std::vector<uint32_t>{0x10C69A});
+}
+
+TEST(a_players_furniture_animation_reaches_the_others)
+{
+    // Alex, 2026-10-30: sitting down synced. A chair's animation, as the game names it (lab, 2026-10-30).
+    const std::string chair = "Meshes\\Characters\\_Male\\IdleAnims\\DynamicIdle_ChairSit.kf";
+    CHECK(net::IsAnimPath(chair));
+    CHECK(net::IsAnimPath("characters\\_male\\idleanims\\stool.KF"));
+    CHECK(!net::IsAnimPath("Meshes\\Characters\\..\\..\\..\\x.kf"));  // out of the game's folders
+    CHECK(!net::IsAnimPath("C:\\Windows\\x.kf"));
+    CHECK(!net::IsAnimPath("Characters\\_Male\\x.nif"));
+    CHECK(!net::IsAnimPath("Textures\\x.kf"));
+    CHECK(!net::IsAnimPath("Characters\\x\" ; tcl \".kf"));  // it goes into a console line
+    MsgType t;
+    net::PlayerAnim m;
+    Bytes bad = Encode(net::PlayerAnim{1, "Characters/_Male/x.kf"});
+    Reader rb(bad);
+    CHECK(rb.Type(t) && t == MsgType::PlayerAnim && !Decode(rb, m));
+
+    coop::Coop host, a, b2;
+    CHECK(host.Host(kTestPort, "Host"));
+    CHECK(a.Join("127.0.0.1", kTestPort, "Ann"));
+    CHECK(b2.Join("127.0.0.1", kTestPort, "Bob"));
+    CHECK(RunUntil({&host, &a, &b2}, [&] {
+        return a.GetFriendState() == coop::FriendState::Joined && b2.GetFriendState() == coop::FriendState::Joined;
+    }));
+    uint8_t ann = a.MyPlayerId();
+    a.SetMyAnim(chair);  // Ann sits down
+    CHECK(RunUntil({&host, &a, &b2}, [&] {
+        auto h = host.Anims().find(ann), b = b2.Anims().find(ann);
+        return h != host.Anims().end() && h->second == chair && b != b2.Anims().end() && b->second == chair;
+    }));
+    a.SetMyAnim("");  // and gets up
+    CHECK(RunUntil({&host, &a, &b2}, [&] { return !host.Anims().count(ann) && !b2.Anims().count(ann); }));
+    host.SetMyAnim(chair);  // the host sits
+    CHECK(RunUntil({&host, &a, &b2}, [&] { return a.Anims().count(coop::kHostPlayerId) == 1; }));
+    coop::Coop late;  // someone joining sees them sitting
+    CHECK(late.Join("127.0.0.1", kTestPort, "Cat"));
+    CHECK(RunUntil({&host, &a, &b2, &late}, [&] { return late.Anims().count(coop::kHostPlayerId) == 1; }));
+}
+
+TEST(a_players_speed_and_mod_animations_reach_the_others)
+{
+    // Alex, 2026-10-30: Enhanced Movement's sprint (any kNVSE animation mod) shows on friends' characters: their
+    // speed and the files mods give their character.
+    MsgType t;
+    PlayerState state;
+    Bytes s = Encode(PlayerState{1, 0, 0, 0, 0, 0, 0, 0, 0x201, 0, 610});
+    Reader rs(s);
+    CHECK(rs.Type(t) && Decode(rs, state) && state.runSpeed == 610);
+
+    const std::string sprint = "characters\\_male\\em_sprintm\\mtfastforward.kf";
+    CHECK(net::IsAnimPath(sprint));
+    CHECK(net::IsAnimPath("meshes\\animgroupoverride\\em_prone\\_male\\sneakmtidle.kf"));
+    net::PlayerModAnims m;
+    Bytes b = Encode(net::PlayerModAnims{2, {sprint}});
+    Reader r(b);
+    CHECK(r.Type(t) && t == MsgType::PlayerModAnims && Decode(r, m) && m.paths == std::vector<std::string>{sprint});
+    Bytes bad = Encode(net::PlayerModAnims{2, {"textures\\x.kf"}});
+    Reader rb(bad);
+    CHECK(rb.Type(t) && !Decode(rb, m));
+
+    coop::Coop host, a, b2;
+    CHECK(host.Host(kTestPort, "Host"));
+    CHECK(a.Join("127.0.0.1", kTestPort, "Ann"));
+    CHECK(b2.Join("127.0.0.1", kTestPort, "Bob"));
+    CHECK(RunUntil({&host, &a, &b2}, [&] {
+        return a.GetFriendState() == coop::FriendState::Joined && b2.GetFriendState() == coop::FriendState::Joined;
+    }));
+    uint8_t ann = a.MyPlayerId();
+    a.SetMyModAnims({sprint});  // Ann sprints
+    CHECK(RunUntil({&host, &a, &b2}, [&] { return host.ModAnims().count(ann) && b2.ModAnims().count(ann); }));
+    a.SetMyModAnims({});  // and stops
+    CHECK(RunUntil({&host, &a, &b2}, [&] { return !host.ModAnims().count(ann) && !b2.ModAnims().count(ann); }));
+}
+
+TEST(join_addresses_are_checked)
+{
+    // Alex, 2026-10-30: joining by IP (port forwarding or a free VPN): JoinAddress in NVCoop.ini.
+    std::string host;
+    uint16_t port = 27960;
+    CHECK(net::ParseHostAddress("203.0.113.5", host, port) && host == "203.0.113.5" && port == 27960);
+    CHECK(net::ParseHostAddress(" 100.64.1.2:27961 ", host, port) && host == "100.64.1.2" && port == 27961);
+    CHECK(net::ParseHostAddress("my-pc.tailnet.ts.net", host, port) && host == "my-pc.tailnet.ts.net");
+    port = 27960;
+    CHECK(!net::ParseHostAddress("", host, port));
+    CHECK(!net::ParseHostAddress("1.2.3.4:0", host, port));
+    CHECK(!net::ParseHostAddress("1.2.3.4:70000", host, port));
+    CHECK(!net::ParseHostAddress("1.2.3.4:", host, port));
+    CHECK(!net::ParseHostAddress("http://1.2.3.4", host, port));
+    CHECK(!net::ParseHostAddress("1.2.3.4 5.6.7.8", host, port) && port == 27960);
+}
+
+TEST(the_teleporter_brings_a_player_or_goes_to_them)
+{
+    // Alex, 2026-10-30: an aid item for when someone is stuck; go to someone, or bring them here.
+    MsgType t;
+    net::Teleport m;
+    Bytes b = Encode(net::Teleport{2, 0});
+    Reader r(b);
+    CHECK(r.Type(t) && t == MsgType::Teleport && Decode(r, m) && m.mover == 2 && m.target == 0);
+    Bytes self = Encode(net::Teleport{2, 2});  // to themselves
+    Reader rs(self);
+    CHECK(rs.Type(t) && !Decode(rs, m));
+
+    coop::Coop host, a, b2;
+    CHECK(host.Host(kTestPort, "Host"));
+    CHECK(a.Join("127.0.0.1", kTestPort, "Ann"));
+    CHECK(b2.Join("127.0.0.1", kTestPort, "Bob"));
+    CHECK(RunUntil({&host, &a, &b2}, [&] {
+        return a.GetFriendState() == coop::FriendState::Joined && b2.GetFriendState() == coop::FriendState::Joined &&
+            a.Remotes().count(b2.MyPlayerId()) && b2.Remotes().count(a.MyPlayerId());
+    }));
+    a.AskTeleport(b2.MyPlayerId(), a.MyPlayerId());  // Ann brings Bob to her
+    std::vector<uint8_t> bob;
+    CHECK(RunUntil({&host, &a, &b2}, [&] {
+        for (uint8_t p : b2.TakeTeleports())
+            bob.push_back(p);
+        return !bob.empty();
+    }));
+    CHECK(bob == std::vector<uint8_t>{a.MyPlayerId()});
+    a.AskTeleport(a.MyPlayerId(), coop::kHostPlayerId);  // Ann goes to the host: her own game moves her
+    CHECK(a.TakeTeleports() == std::vector<uint8_t>{coop::kHostPlayerId});
+    a.AskTeleport(b2.MyPlayerId(), coop::kHostPlayerId);  // Bob to the host: not Ann's to ask
+    std::vector<uint8_t> host0;
+    RunUntil({&host, &a, &b2}, [&] {
+        for (uint8_t p : b2.TakeTeleports())
+            bob.push_back(p);
+        for (uint8_t p : host.TakeTeleports())
+            host0.push_back(p);
+        return false;
+    }, 300);
+    CHECK(bob.size() == 1 && host0.empty());
+    b2.AskTeleport(coop::kHostPlayerId, b2.MyPlayerId());  // Bob brings the host
+    CHECK(RunUntil({&host, &a, &b2}, [&] {
+        for (uint8_t p : host.TakeTeleports())
+            host0.push_back(p);
+        return !host0.empty();
+    }));
+    CHECK(host0 == std::vector<uint8_t>{b2.MyPlayerId()});
 }
 
 TEST(the_host_tells_friends_when_enemies_fight_them)

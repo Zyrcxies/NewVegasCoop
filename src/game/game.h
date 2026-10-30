@@ -131,7 +131,18 @@ namespace game
     void ShowMessage(const std::string& text);  // in the game's message box, with an OK button
     void RetryMessageBoxes();  // every frame: our boxes wait for no box to be open, then show (one a frame)
     // Once, before the main menu first opens: adds Host and Join to it (after Load); clicking calls these.
-    bool AddCoopToMainMenu(void (*onHost)(), void (*onJoin)());
+    // onAddress: if not null, also a Co-op Address option in the pause menu (in game only: hosting by IP; Alex,
+    // 2026-10-30: the addresses only on screen when asked for, as streamers show their screen).
+    bool AddCoopToMainMenu(void (*onHost)(), void (*onJoin)(), void (*onAddress)() = nullptr);
+    // Typing into a box of ours (Alex, 2026-10-30: the host's IP at the main menu, hidden on screen): the keys go to
+    // it, not the game, until Enter (Done: TakeTextEntry has the text) or Esc (Cancelled). StopTextEntry: given up.
+    enum class EntryState { None, Typing, Done, Cancelled };
+    bool StartTextEntry();
+    void StopTextEntry();
+    EntryState TextEntryState();
+    size_t TextEntryLength();
+    std::string TakeTextEntry();  // (then None)
+    void TypeIntoEntry(const std::string& text);  // lab: as if typed, then Enter
     bool MainMenuMade();  // the main menu's options were made (it's up, or has been)
     // Once: every load of a save asks `mayLoad` first (the save's name, without folder or .fos); false: not loaded.
     bool InstallLoadCheck(bool (*mayLoad)(const std::string& save));
@@ -202,6 +213,34 @@ namespace game
     void Kill(TESObjectREFR* ref, uint16_t limbs = 0);
     uint16_t LimbsGone(TESObjectREFR* ref);  // body parts cut off (a bit each, 0-14: IsLimbGone)
     void SetMaxHealth(TESObjectREFR* ref, float health);  // its base health (game's SetActorValue)
+    // Fast travel: every map marker in the game's files (in every world space), whether ours can be travelled
+    // to, its name, and unlocking it (the game's ShowMap).
+    std::vector<TESObjectREFR*> MapMarkers();
+    bool CanTravelTo(const TESObjectREFR* marker);
+    std::string MarkerName(const TESObjectREFR* marker);
+    void UnlockTravel(TESObjectREFR* marker);
+    // The teleporter item (Alex, 2026-10-30): an aid item with no effects that can't be dropped; not kept in saves.
+    TESForm* TeleporterItem();  // null if it couldn't be made
+    int ItemCount(TESObjectREFR* ref, TESForm* item);
+    // A friend's character shown on the Pip-Boy map, with its name (JIP's ref map markers), or not any more.
+    void SetRefMapMarker(TESObjectREFR* ref, bool on);
+    // A friend's character as a tick on the compass (not hostile), within the distance the game shows actors at; on
+    // again every frame (the game's own detection may change it). Off is safe for a character the game deleted.
+    void SetOnCompass(TESObjectREFR* actor, bool on);
+    // Sitting synced (Alex, 2026-10-30): the furniture animation file an actor plays (sitting in a chair), or "" if
+    // it's in none; playing one on a friend's character (kNVSE), ending it, and its collision (off while it sits).
+    std::string FurnitureAnim(TESObjectREFR* actor);
+    void PlayAnimFile(TESObjectREFR* actor, const std::string& path);
+    void StopAnimFile(TESObjectREFR* actor, const std::string& path);
+    // Whether it plays (and, if loop, it then loops: no end).
+    bool IsPlayingAnimFile(TESObjectREFR* actor, const std::string& path, bool loop = true);
+    void SetCollision(TESObjectREFR* actor, bool on);
+    void SetActorAlpha(TESObjectREFR* actor, float alpha);  // 0 unseen, 1 as normal (the game's SetActorAlpha)
+    // The controls a script has locked on our player (DisablePlayerControls: 1 movement, 2 looking, 4 Pip-Boy,
+    // 8 fighting, 0x10 view, 0x20 rollover text, 0x40 sneaking).
+    uint8_t PlayerDisabledControls();
+    // Lab: the actor uses (sits in) the nearest furniture; returns it, or null if there's none near.
+    TESObjectREFR* SitInNearestChair(TESObjectREFR* actor);
     uint32_t PlayedIdle(TESObjectREFR* ref);  // idle animation it's playing (JIP GetPlayedIdle), 0 none
     bool PlayIdle(TESObjectREFR* ref, uint32_t idleId);  // JIP PlayIdleEx; false if the id isn't an idle here
     // A copy of a host's NPC attacks: like PlayAttack, with a harmless copy of the gun it holds.
@@ -291,8 +330,25 @@ namespace game
     void ShowChatAbove(int slot, const TESObjectREFR* who, const std::string& text);
     void UpdateChatAbove();
     // Friends' markers (a chevron and their name above them, on the HUD): the friends' characters to mark, with
-    // their names (4 at most; none hides them). Call every frame.
-    void ShowFriendMarkers(const std::vector<std::pair<TESObjectREFR*, std::string>>& friends);
+    // their text (4 at most; none hides them), red for a downed friend (Alex, 2026-10-30). Call every frame.
+    struct FriendMark
+    {
+        TESObjectREFR* who = nullptr;
+        std::string text;
+        bool downed = false;
+    };
+    void ShowFriendMarkers(const std::vector<FriendMark>& friends);
+    // The revive bar under the crosshair (Alex, 2026-10-30): its text, or "" to hide it. Cheap to call every frame.
+    void ShowReviveBar(const std::string& text);
+    // An actor's speed in percent (100 normal; JIP's SetSpeedMult, which takes at once).
+    void SetSpeedMult(TESObjectREFR* actor, int mult);
+    // Its running speed now (game units a second), as the game has worked it out (its process's cached value: with
+    // perks, a sprint mod's, weapon penalties); 0 if the game hasn't (not moving, or no process).
+    float CachedRunSpeed(TESObjectREFR* actor);
+    // Animations from mods (Alex, 2026-10-30): the files an actor plays now that kNVSE loaded (all lower case: the
+    // game's own keep their capitals), and one applied to an actor, or taken off it (kNVSE SetActorAnimationPath).
+    std::vector<std::string> ModAnimFiles(TESObjectREFR* actor);
+    void SetAnimOverride(TESObjectREFR* actor, const std::string& path, bool on);
     float DistanceToPlayer(const TESObjectREFR* ref);  // (huge without one)
     bool InLoadingScreen();  // the loading screen is up (MenuMode 1007)
 

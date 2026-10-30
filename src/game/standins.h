@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <map>
+#include <string>
 #include <vector>
 
 class TESObjectREFR;
@@ -18,7 +19,9 @@ namespace game
     {
     public:
         // Every frame while a game is loaded. myPose: where our own character is.
-        void Update(const coop::Coop& coop, uint32_t now, const coop::Pose& myPose);
+        // cutscene: a script has our player's movement locked (not our own downed or waiting): their characters are
+        // hidden and go through everyone meanwhile (Alex, 2026-10-30: they blocked the view).
+        void Update(const coop::Coop& coop, uint32_t now, const coop::Pose& myPose, bool cutscene = false);
         void RemoveAll();  // delete them from the world
         void Forget();     // the world was unloaded (they're gone with it)
         std::vector<uint32_t> RefIds() const;  // their characters, for cleaning up after loading a save
@@ -37,7 +40,13 @@ namespace game
             uint32_t gearChanges = 0;
             bool hasGear = false;
             bool downed = false;  // lying down because its player is downed
-            uint32_t knockedAt = 0;
+            bool onMap = false;   // shown on the Pip-Boy map (Alex, 2026-10-30)
+            std::string anim;     // the furniture animation it plays because its player sits ("" none)
+            std::vector<std::string> modAnims;  // animation files from mods applied to it (as its player has them)
+            uint32_t nextHoldAt = 0;  // sitting: put back on their seat then
+            uint32_t nextAnimCheckAt = 0;  // sitting: checked it really plays the animation then
+            bool ghost = false;   // its collision is off (sitting or downed: held in place then)
+            bool hidden = false;  // unseen (a cutscene)
             uint32_t nextCalmAt = 0;  // when to check it isn't fighting
             // Created, but the game is still loading its body in the background: until then we leave it alone
             // (changing it meanwhile can damage the game's memory and crash it later).
@@ -52,6 +61,10 @@ namespace game
         // Its character, if the game still has it (one left in a part of the world that was unloaded can be
         // deleted; NPCs are looked up each frame for the same reason).
         static TESObjectREFR* Live(const Entry& e);
+        static void ShowOnMap(Entry& e, bool on);
+        // Sitting synced (Alex, 2026-10-30): their furniture animation, on their seat.
+        // True while it sits (its legs left alone).
+        static bool Furniture(const coop::Coop& coop, uint8_t id, Entry& e, const coop::Pose& pose, uint32_t now);  // (removing is safe for a character the game deleted)
 
         std::map<uint8_t, Entry> m_entries;  // by player id
         std::map<uint8_t, bool> m_tooFar;    // players further off than we show (logged when it changes)

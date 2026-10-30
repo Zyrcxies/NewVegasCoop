@@ -3,9 +3,65 @@
 #include "log.h"
 
 #include <enet/enet.h>
+#include <ws2tcpip.h>
+
+#include <algorithm>
+#include <cstdlib>
 
 namespace net
 {
+    bool ParseHostAddress(const std::string& text, std::string& host, uint16_t& port)
+    {
+        size_t first = text.find_first_not_of(" \t"), last = text.find_last_not_of(" \t");
+        if (first == std::string::npos)
+            return false;
+        std::string t = text.substr(first, last - first + 1);
+        std::string name = t;
+        uint16_t given = port;
+        if (size_t colon = t.find(':'); colon != std::string::npos)
+        {
+            name = t.substr(0, colon);
+            std::string digits = t.substr(colon + 1);
+            if (digits.empty() || digits.size() > 5 ||
+                digits.find_first_not_of("0123456789") != std::string::npos)
+                return false;
+            long number = std::strtol(digits.c_str(), nullptr, 10);
+            if (number < 1 || number > 65535)
+                return false;
+            given = static_cast<uint16_t>(number);
+        }
+        if (name.empty() || name.size() > 253 ||
+            name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-") !=
+                std::string::npos)
+            return false;
+        host = name;
+        port = given;
+        return true;
+    }
+
+    std::vector<std::string> LocalAddresses()
+    {
+        std::vector<std::string> out;
+        char name[256] = {};
+        if (gethostname(name, sizeof(name)) != 0)
+            return out;
+        addrinfo hints{};
+        hints.ai_family = AF_INET;
+        addrinfo* found = nullptr;
+        if (getaddrinfo(name, nullptr, &hints, &found) != 0)
+            return out;
+        for (addrinfo* a = found; a; a = a->ai_next)
+        {
+            char text[INET_ADDRSTRLEN] = {};
+            auto* in = reinterpret_cast<sockaddr_in*>(a->ai_addr);
+            if (inet_ntop(AF_INET, &in->sin_addr, text, sizeof(text)) && std::string(text).rfind("127.", 0) != 0 &&
+                std::find(out.begin(), out.end(), text) == out.end())
+                out.push_back(text);
+        }
+        freeaddrinfo(found);
+        return out;
+    }
+
     namespace
     {
         enum Channel : uint8_t { kReliable = 0, kUnreliable = 1, kChannelCount = 2 };
@@ -74,7 +130,7 @@ namespace net
         address.port = port;
         if (enet_address_set_host(&address, host.c_str()) != 0)
         {
-            LOG_ERROR("Couldn't find address %s", host.c_str());
+            LOG_ERROR("Couldn't find the host's address (not an IP address or a known name)");
             EnetRelease();
             return false;
         }
