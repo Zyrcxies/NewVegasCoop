@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "coop/desync.h"
 
 namespace coop
@@ -13,7 +15,7 @@ namespace coop
             it = m_entries.emplace(key, Entry{d, now, now, false}).first;
         }
         else if (now - it->second.lastSeen > kDesyncGoneMs)
-            it->second.firstSeen = now;  // (a gap: it was over in between, this is a new one)
+            it->second.firstSeen = now;
         it->second.what.detail = d.detail;
         it->second.lastSeen = now;
     }

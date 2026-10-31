@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "dev/second_copy.h"
 
 #include "log.h"
@@ -6,12 +8,6 @@
 #include <cstring>
 #include <intrin.h>
 #include <windows.h>
-
-// The game refuses to start twice by creating a lock named FalloutNVGameMutex.
-// Our plugin loads before that check, so we swap the game's CreateMutexA/OpenMutexA
-// (in its import table) for versions that give that one lock a per-process name.
-// If the lock exists it then looks for the first game's window with FindWindowA, focuses it
-// and quits, so that lookup is made to find nothing.
 
 namespace
 {
@@ -52,7 +48,6 @@ namespace
         return g_findWindow(className, title);
     }
 
-    // Diagnostics: log where the game decides to quit, to find any further checks.
     using ExitProcess_t = void(WINAPI*)(UINT);
     using PostQuitMessage_t = void(WINAPI*)(int);
     ExitProcess_t g_exitProcess = nullptr;
@@ -82,10 +77,8 @@ namespace
         return g_terminate(process, code);
     }
 
-    bool g_isSecondCopy = false;  // another game with this setting was already running when we started
+    bool g_isSecondCopy = false;
 
-    // The second copy doesn't sign in to Steam: the first test on 2026-10-08 showed it ended from outside right
-    // after signing in, likely by Steam seeing the same game twice. Testing connects on this PC, without Steam.
     __declspec(noinline) bool __cdecl SteamInitHook()
     {
         if (g_isSecondCopy)
@@ -98,8 +91,6 @@ namespace
         return ok;
     }
 
-    // Every way of ending a process goes through ntdll's NtTerminateProcess (ExitProcess and TerminateProcess
-    // from any module), so a jump at its start logs who ended us. If it never logs, something outside did.
     using NtTerminate_t = LONG(NTAPI*)(HANDLE, LONG);
     NtTerminate_t g_ntTerminate = nullptr;
     uint8_t g_ntTerminateStart[5];
@@ -121,7 +112,6 @@ namespace
             LOG_INFO("  %p %s+%X", frames[i], file ? file + 1 : name,
                 static_cast<unsigned>(reinterpret_cast<uintptr_t>(frames[i]) - reinterpret_cast<uintptr_t>(module)));
         }
-        // Put the start back (we're ending anyway) and carry on.
         DWORD old;
         VirtualProtect(reinterpret_cast<void*>(g_ntTerminate), 5, PAGE_EXECUTE_READWRITE, &old);
         std::memcpy(reinterpret_cast<void*>(g_ntTerminate), g_ntTerminateStart, 5);
@@ -133,14 +123,14 @@ namespace
     bool TraceTerminate()
     {
         auto* start = reinterpret_cast<uint8_t*>(GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtTerminateProcess"));
-        if (!start || start[0] != 0xB8)  // expected: mov eax, <system call number> (5 bytes)
+        if (!start || start[0] != 0xB8)
             return false;
         g_ntTerminate = reinterpret_cast<NtTerminate_t>(start);
         std::memcpy(g_ntTerminateStart, start, 5);
         DWORD old;
         if (!VirtualProtect(start, 5, PAGE_EXECUTE_READWRITE, &old))
             return false;
-        start[0] = 0xE9;  // jmp NtTerminateHook
+        start[0] = 0xE9;
         int32_t rel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(&NtTerminateHook) - reinterpret_cast<uintptr_t>(start + 5));
         std::memcpy(start + 1, &rel, 4);
         VirtualProtect(start, 5, old, &old);
@@ -148,7 +138,6 @@ namespace
         return true;
     }
 
-    // Which DLL an address is in, and how far into it.
     const char* ModuleOf(const void* address, uintptr_t& offset)
     {
         static thread_local char name[MAX_PATH];
@@ -165,8 +154,6 @@ namespace
         return file ? file + 1 : name;
     }
 
-    // The C++ type thrown (e.g. ".?AVruntime_error@std@@"), read from the exception's throw info (32-bit
-    // MSVC layout: ThrowInfo -> CatchableTypeArray -> first CatchableType -> TypeDescriptor name).
     const char* ThrownType(const EXCEPTION_RECORD* r)
     {
         if (r->ExceptionCode != 0xE06D7363 || r->NumberParameters < 3)
@@ -185,14 +172,12 @@ namespace
         }
     }
 
-    // Every error the game or a plugin hits (even ones handled later), with who hit it: finds what makes a
-    // copy stop itself. Only the first few, with where they came from.
     LONG CALLBACK OnException(EXCEPTION_POINTERS* info)
     {
         static LONG s_count = 0;
         const EXCEPTION_RECORD* r = info->ExceptionRecord;
         DWORD code = r->ExceptionCode;
-        if (code == 0x406D1388 || code == 0x40010006 || code == 0x4001000A)  // thread names, debug text
+        if (code == 0x406D1388 || code == 0x40010006 || code == 0x4001000A)
             return EXCEPTION_CONTINUE_SEARCH;
         LONG n = InterlockedIncrement(&s_count);
         if (n > 30)
@@ -214,7 +199,6 @@ namespace
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
-    // "Still running" every 5 s for the first 2 minutes: shows when a copy stopped, even if nothing else logs.
     DWORD WINAPI Heartbeat(void*)
     {
         for (int s = 5; s <= 120; s += 5)
@@ -225,7 +209,6 @@ namespace
         return 0;
     }
 
-    // Replace one Windows function in the game exe's import table. Returns the original.
     void* PatchImport(const char* dll, const char* function, void* replacement)
     {
         auto* base = reinterpret_cast<uint8_t*>(GetModuleHandleA(nullptr));
@@ -257,7 +240,6 @@ namespace
 
 void AllowSecondCopy(bool waitForDebugger)
 {
-    // Our own marker (the game's lock is renamed per copy below, so it can't tell us).
     CreateMutexA(nullptr, FALSE, "NVCoop_GameRunning");
     g_isSecondCopy = GetLastError() == ERROR_ALREADY_EXISTS;
     LOG_INFO("Developer setting AllowSecondCopy: this is the %s copy", g_isSecondCopy ? "second" : "first");

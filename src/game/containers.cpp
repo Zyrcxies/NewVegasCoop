@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "game/containers.h"
 
 #include "coop/clock.h"
@@ -11,7 +13,7 @@ namespace game
 {
     namespace
     {
-        constexpr uint32_t kLookMs = 250;  // how often open containers are read
+        constexpr uint32_t kLookMs = 250;
 
         bool Read(TESObjectREFR* ref, std::vector<net::ItemCount>& out, double& ms)
         {
@@ -41,6 +43,14 @@ namespace game
     {
         if (!coop.InGame())
             return;
+        if (QuantityPromptOpen())
+        {
+            if (!m_waitedForPrompt)
+                LOG_DEBUG("Containers: waiting while a \"how many?\" prompt is open");
+            m_waitedForPrompt = true;
+            return;
+        }
+        m_waitedForPrompt = false;
         bool host = coop.GetRole() == coop::Role::Host;
         if (host)
             HostApply(coop);
@@ -49,15 +59,12 @@ namespace game
             std::vector<net::ItemCount> refunds = coop.TakeItemRefunds();
             for (const net::ItemCount& r : refunds)
             {
-                // Our player's take or put didn't happen in the host's world: undone in ours.
                 ChangeItem(Player(), r);
                 ++m_refunds;
                 LOG_INFO("Containers: %d of %08X %s our inventory (someone got there first)",
                     r.count < 0 ? -r.count : r.count, r.item, r.count < 0 ? "taken back out of" : "given back to");
                 Notify(r.count < 0 ? "Someone else took that first" : "That couldn't go in there: given back");
             }
-            // An open inventory or container screen still lists what was there: shown afresh at once, or taking
-            // what's gone crashes the game (host, 2026-10-15: a friend's take, then the host took the same item).
             if (!refunds.empty())
                 RefreshItemList();
         }
@@ -98,7 +105,7 @@ namespace game
         std::vector<coop::Coop::ItemChangeFrom> changes = coop.TakeContainerChanges();
         if (changes.empty())
             return;
-        TESObjectREFR* mine = OpenContainer();  // the one our own player has open, if any
+        TESObjectREFR* mine = OpenContainer();
         bool changedMine = false;
         for (const coop::Coop::ItemChangeFrom& c : changes)
         {
@@ -109,7 +116,6 @@ namespace game
             refund.count = 0;
             if (want.count < 0)
             {
-                // Taken: as many as there still are; the rest come back out of the friend's inventory.
                 int32_t have = 0;
                 std::vector<net::ItemCount> items;
                 if (ok && Read(ref, items, m_readMs))
@@ -126,7 +132,7 @@ namespace game
             else if (ok)
                 ChangeItem(ref, want);
             else
-                refund.count = want.count;  // put into something that isn't a container here: given back
+                refund.count = want.count;
             ++m_changes;
             if (refund.count)
                 ++m_refunds;
@@ -136,15 +142,12 @@ namespace game
             coop.ContainerChangeDone(c.playerId, c.change.seq, refund);
             changedMine |= ok && ref == mine;
         }
-        // Our open screen still lists what was there: shown afresh at once, or taking what's gone crashes the game
-        // (2026-10-15: a friend took items from the box the host had open; the host took them too and crashed).
         if (changedMine)
             RefreshItemList();
     }
 
     void Containers::FriendLook(coop::Coop& coop, const Npcs& npcs)
     {
-        // The one open, or else the one we aim at (matched before it opens).
         TESObjectREFR* open = OpenContainer();
         bool isOpen = open != nullptr;
         if (!open)

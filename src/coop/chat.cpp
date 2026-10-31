@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "coop/chat.h"
 
 #include <cmath>
@@ -41,7 +43,7 @@ namespace coop
             mix.volume = 1 - (distance - kSpeechFullRange) / (kSpeechSilentRange - kSpeechFullRange);
         float flat = std::sqrt(dx * dx + dy * dy);
         if (flat > 1)
-            mix.pan = std::sin(std::atan2(dx, dy) - heading);  // (right of where the listener looks: positive)
+            mix.pan = std::sin(std::atan2(dx, dy) - heading);
         return mix;
     }
 
@@ -53,7 +55,6 @@ namespace coop
 
     namespace
     {
-        // One-pole filters: a low-pass (what's under `hz` stays) and a high-pass (what's over it stays).
         struct LowPass
         {
             float a, y = 0;
@@ -82,7 +83,6 @@ namespace coop
         {
         case VoiceEffect::Radio:
         {
-            // A walkie-talkie: thin (300 to 3000 Hz), driven a little, with a hiss.
             HighPass high(300, r);
             LowPass low1(3000, r), low2(3000, r);
             uint32_t noise = 12345;
@@ -98,7 +98,6 @@ namespace coop
         }
         case VoiceEffect::Robot:
         {
-            // Metallic: ring modulation at 55 Hz, then a short ringing comb (6 ms).
             size_t delay = static_cast<size_t>(r * 0.006f);
             std::vector<float> out(samples.size());
             for (size_t i = 0; i < samples.size(); ++i)
@@ -115,7 +114,6 @@ namespace coop
         }
         case VoiceEffect::Echo:
         {
-            // Two echoes a fifth of a second apart, each fainter.
             size_t delay = static_cast<size_t>(r * 0.22f);
             size_t length = samples.size();
             std::vector<float> out(length + delay * 2, 0.0f);
@@ -133,7 +131,6 @@ namespace coop
         }
         case VoiceEffect::Megaphone:
         {
-            // Loud and harsh: 500 to 3500 Hz, clipped hard.
             HighPass high(500, r);
             LowPass low(3500, r);
             for (int16_t& s : samples)

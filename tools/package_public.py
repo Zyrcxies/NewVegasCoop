@@ -12,7 +12,8 @@ INI = '''[Coop]
 Mode=menu
 ; The port joining by IP uses (UDP). Hosting by IP and the address to join are picked in the main menu.
 Port=27960
-; When hosting: quest mods whose quests your game runs for everyone (file names, commas between)
+; When hosting: quest mods whose quests your game runs for everyone (file names, commas between); TTW's and New
+; California's are run for everyone on their own
 HostQuestMods=
 ; 1 keeps Discord's overlay out of the game (it crashes New Vegas, even when turned off in Discord)
 BlockDiscordOverlay=1
@@ -50,8 +51,9 @@ Later sessions: the host loads the group's last save with Host Co-op; friends ju
 Joining by IP (without Steam friends)
 Co-op normally goes through Steam (friends only, nothing to set up). To join by IP address instead:
 - Host: Host Co-op > "Steam friends, and by IP address". Then either forward UDP port 27960 on the router to your
-  PC, or everyone installs the same free VPN (Tailscale, ZeroTier or Radmin VPN). Your addresses are in the pause
-  menu > Co-op Address (they're never shown on their own: safe for streaming).
+  PC, or everyone installs the same free VPN (Tailscale, ZeroTier or Radmin VPN). Your addresses are under MCM >
+  New Vegas Co-op > Show My Address (they're never shown on their own: safe for streaming); the VPN's app shows
+  yours too, and with port forwarding it's your router's public address (search "what is my IP").
 - Friends: Join Co-op > By IP address, and type the host's address (the router's public IP when port forwarding,
   or the host's VPN address). It shows as stars while typed, and is remembered: next time it's "The last IP
   address". The host still lets each friend in.
@@ -75,7 +77,7 @@ Best practices
 - Turn off Discord's in-game overlay.
 
 Early release: please report bugs!
-This is the first public version, so expect some. On the Nexus page's Bugs tab, say what happened and what you
+This is an early version, so expect some. On the Nexus page's Bugs tab, say what happened and what you
 were doing, and attach NVCoop.log and NVCoop.previous.log from the game's folder (from everyone who played if you
 can), plus any NVCoop-crash-....dmp file.
 '''
@@ -85,6 +87,7 @@ files = {
     'NVSE/Plugins/NVCoop.ini': INI.replace('\n', '\r\n').encode(),
     'MCM/NVCoop.json': open(os.path.join(ROOT, 'data', 'MCM', 'NVCoop.json'), 'rb').read(),
     'README - New Vegas Co-op.txt': README.replace('\n', '\r\n').encode('utf-8'),
+    'LICENSE.txt': open(os.path.join(ROOT, 'LICENSE'), 'rb').read(),
 }
 with zipfile.ZipFile(ZIP, 'w', zipfile.ZIP_DEFLATED) as z:
     for name, data in files.items():

@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "coop/mods.h"
 
 #include "coop/quests.h"
@@ -163,7 +165,7 @@ namespace coop
         struct FileInfo
         {
             uint64_t size = 0;
-            uint64_t time = 0;  // last written
+            uint64_t time = 0;
         };
 
         bool Stat(const std::string& path, FileInfo& out)
@@ -236,7 +238,6 @@ namespace coop
             return true;
         }
 
-        // "kind \t name \t size \t time" -> fingerprint
         using HashCache = std::map<std::string, net::Hash>;
         std::string CacheKey(const ModFile& f, const FileInfo& info)
         {
@@ -318,7 +319,6 @@ namespace coop
             if (_stricmp(dll.c_str(), skipDll.c_str()) != 0)
                 add(dllFolder, dll, ModKind::Dll, true);
 
-        // Fingerprints: from the cache when the file hasn't changed, otherwise read it.
         HashCache cache = ReadCache(cacheFile), used;
         std::vector<uint8_t> buffer;
         size_t read = 0;

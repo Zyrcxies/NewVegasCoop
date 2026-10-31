@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "voice_out.h"
 
 #include "log.h"
@@ -9,8 +11,8 @@
 
 namespace
 {
-    constexpr size_t kBlockFrames = coop::kVoiceRate / 50;  // 20 ms
-    constexpr int kBlocks = 4;                              // queued with Windows at once (80 ms)
+    constexpr size_t kBlockFrames = coop::kVoiceRate / 50;
+    constexpr int kBlocks = 4;
 }
 
 VoiceOut::~VoiceOut()
@@ -20,7 +22,7 @@ VoiceOut::~VoiceOut()
         m_stop = true;
     }
     if (m_thread.joinable())
-        m_thread.detach();  // (the game is closing: its threads may be gone already)
+        m_thread.detach();
 }
 
 void VoiceOut::Push(uint8_t who, const std::vector<int16_t>& samples)
@@ -77,7 +79,7 @@ void VoiceOut::Run()
         headers[i].lpData = reinterpret_cast<LPSTR>(buffers[i].data());
         headers[i].dwBufferLength = static_cast<DWORD>(kBlockFrames * 4);
         waveOutPrepareHeader(out, &headers[i], sizeof(WAVEHDR));
-        headers[i].dwFlags |= WHDR_DONE;  // (free to fill)
+        headers[i].dwFlags |= WHDR_DONE;
     }
     for (;;)
     {

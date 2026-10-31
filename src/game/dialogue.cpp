@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "game/dialogue.h"
 
 #include "coop/clock.h"
@@ -18,23 +20,20 @@ namespace game
 {
     namespace
     {
-        constexpr uint32_t kOurConversationMs = 2000;  // a conversation opening this soon after our activate is ours
-        constexpr uint32_t kSettleConversationMs = 500;  // one we close is closed once open this long
-        // (Closing it as it opened crashed the laptop, 2026-10-15, inside JIP's CloseActiveMenu.)
+        constexpr uint32_t kOurConversationMs = 2000;
+        constexpr uint32_t kSettleConversationMs = 500;
 
         Dialogue* g_dialogue = nullptr;
-        uint8_t* g_original = nullptr;  // the game's RunResultScript, as it was before our hook
+        uint8_t* g_original = nullptr;
 
         void RunOriginal(void* info, uint32_t onEnd, TESObjectREFR* speaker)
         {
             using Fn = void(__thiscall*)(void*, uint32_t, TESObjectREFR*);
-            DialogueLineRunning(true);  // (what it does to a player stays theirs: not mirrored to friends)
+            DialogueLineRunning(true);
             reinterpret_cast<Fn>(g_original)(info, onEnd, speaker);
             DialogueLineRunning(false);
         }
 
-        // In place of the game's TESTopicInfo::RunResultScript (thiscall with two arguments: a fastcall with the
-        // unused edx takes them the same way and pops the same).
         void __fastcall RunResultScriptHook(void* info, void*, uint32_t onEnd, TESObjectREFR* speaker)
         {
             if (g_dialogue)
@@ -50,8 +49,6 @@ namespace game
             std::memcpy(from + 1, &rel, 4);
         }
 
-        // Puts our hook at the start of RunResultScript. Its first 6 bytes (or another plugin's jump there) move to
-        // g_original, which then carries on in the game's code.
         bool InstallHook()
         {
             static const uint8_t kStart[6] = {0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x0C};
@@ -68,7 +65,6 @@ namespace game
             }
             else if (at[0] == 0xE9)
             {
-                // Another plugin's hook: ours runs first, then theirs (which runs the game's).
                 int32_t rel;
                 std::memcpy(&rel, at + 1, 4);
                 JumpTo(back, at + 5 + rel);
@@ -91,7 +87,7 @@ namespace game
             g_original = back;
             JumpTo(at, reinterpret_cast<const void*>(&RunResultScriptHook));
             if (length == 6)
-                at[5] = 0x90;  // (never run: the way back starts after it)
+                at[5] = 0x90;
             VirtualProtect(at, length, old, &old);
             FlushInstructionCache(GetCurrentProcess(), at, length);
             return true;
@@ -127,11 +123,8 @@ namespace game
 
     void Dialogue::Line(void* info, uint32_t onEnd, TESObjectREFR* speaker)
     {
-        // Another player's line our NPC is saying (SayLine): its script is theirs (the host runs it once).
-        // (Not our own conversation's: we may be talking to them ourselves now, with the same line.)
         if (speaker && speaker != DialoguePartner() && SaidForOthers(speaker, info))
             return;
-        // Only our player's own conversation, in co-op, on the game's main thread; everything else as usual.
         if (m_replaying || GetCurrentThreadId() != m_thread || !m_coop || !m_coop->InGame() || !speaker)
             return RunOriginal(info, onEnd, speaker);
         TESObjectREFR* partner = DialoguePartner();
@@ -139,17 +132,12 @@ namespace game
             TopicInfoPrompt(info).c_str(), onEnd ? "ends" : "starts", Name(speaker), RefId(speaker),
             partner ? "with" : "closed", partner ? RefId(partner) : 0);
         bool host = m_coop->GetRole() == coop::Role::Host;
-        // An NPC's line outside a conversation with us runs in every game (Dead Money's intro slides are its
-        // narrator's lines swapping a texture). Its screen effects and control changes count only in the host's
-        // game (game::ScreenFromHost: the narrator's fades once left a friend's screen black).
         if (speaker != partner)
             return RunOriginal(info, onEnd, speaker);
         uint32_t now = GetTickCount();
         bool ours = host || (m_openSince ? m_ours : now - m_lastActivate <= kOurConversationMs);
         if (!ours || !m_coop->MayTalk())
         {
-            // Someone else is talking (ours is being closed), or an NPC started it with us here (the host's game has
-            // those).
             ++m_linesSkipped;
             LOG_INFO("Dialogue: line %08X's script not run here (%s)", TopicInfoId(info),
                 ours ? "someone else is talking" : "an NPC started this conversation here");
@@ -157,7 +145,6 @@ namespace game
         }
         if (host)
             return RunOriginal(info, onEnd, speaker);
-        // Friend: ours runs here as usual; what it gives us is ours alone (the host's game gives the others theirs).
         int32_t xp = PlayerXp(), karma = PlayerKarma();
         RunOriginal(info, onEnd, speaker);
         int32_t gainedXp = PlayerXp() - xp, gainedKarma = PlayerKarma() - karma;
@@ -167,8 +154,6 @@ namespace game
         if (!hostSpeaker)
             return LOG_WARN("Dialogue: %s isn't in the host's game; line %08X not sent", Name(speaker),
                 TopicInfoId(info));
-        // (The host takes lines only from whoever is talking: it hears that first. The greeting's line runs before
-        // our Update sees the conversation open: two-PC test 2026-10-15, Trudy's greetings were dropped.)
         if (!m_reportedTalking || m_reportedNpc != hostSpeaker)
         {
             m_coop->SetMyConversation(true, hostSpeaker);
@@ -195,7 +180,6 @@ namespace game
         if (uint16_t command = ScreenCommandIn(info, line.onEnd))
             return LOG_INFO("Dialogue: %s's line %08X opens a screen (command %04X): not run here",
                 m_coop->NameOf(player).c_str(), line.info, command);
-        // What the line gives or takes from the player is the talker's (their game did it): ours goes back.
         std::vector<Item> before, after;
         bool counted = Contents(Player(), before);
         int32_t xp = PlayerXp(), karma = PlayerKarma();
@@ -256,8 +240,6 @@ namespace game
         TESObjectREFR* partner = open ? DialoguePartner() : nullptr;
         if (!open)
         {
-            // Ours went into another screen (trading, repairs): the conversation coming back after it is ours too
-            // (two-PC test 2026-10-15: Trudy's came back after bartering and was closed as an NPC's).
             if (m_openSince && m_ours && !m_closed)
                 m_afterOurs = true;
             if (m_afterOurs && InMenu())
@@ -273,7 +255,6 @@ namespace game
             m_ours = host || now - m_lastActivate <= kOurConversationMs;
             LOG_INFO("Dialogue: a conversation with %s (%08X) opened (%s)", partner ? Name(partner) : "?",
                 partner ? RefId(partner) : 0, m_ours ? "ours" : "an NPC started it");
-            // One of the group's companions (DESIGN: companions are the party's): our co-op menu first.
             uint8_t leader = 0;
             uint32_t ref = partner ? HostRef(partner) : 0;
             if (!host && m_ours && ref && m_coop->CompanionLeader(ref, leader) &&
@@ -286,9 +267,6 @@ namespace game
             }
         }
 
-        // Tell the host (or as the host, everyone) who we're talking to.
-        // (Trading or another screen our conversation opened still counts: two-PC test 2026-10-15, the laptop could
-        // talk to Chet while the host traded with him.)
         bool inScreen = !open && m_afterOurs && m_reportedTalking;
         bool talking = (open && m_ours && !m_closed) || inScreen;
         uint32_t npc = inScreen ? m_reportedNpc : talking ? HostRef(partner) : 0;
@@ -299,8 +277,6 @@ namespace game
             m_reportedNpc = npc;
         }
 
-        // One conversation at a time (DESIGN): ours closes if someone else is talking. A friend's game also closes
-        // conversations an NPC starts with it (the host's game has them).
         if (open && !m_closed && now - m_openSince >= kSettleConversationMs && (!m_ours || !m_coop->MayTalk()))
         {
             m_closed = true;
@@ -337,9 +313,7 @@ namespace game
 
     void Dialogue::Subtitles(bool talking, TESObjectREFR* partner, uint32_t now)
     {
-        // Ours: each new response the one we're talking to says goes to everyone else, and when they stop (the
-        // line skipped, or done) so does that (DESIGN: everyone nearby hears it).
-        constexpr uint32_t kStartTalkingMs = 1000;  // seen talking this soon after a response starts, or never
+        constexpr uint32_t kStartTalkingMs = 1000;
         Spoken spoken = talking ? SpokenNow() : Spoken{};
         if (talking && spoken.id && spoken.id != m_lastSpoken && *spoken.text)
         {
@@ -376,12 +350,11 @@ namespace game
                 LOG_DEBUG("Dialogue: stopped talking (shared)");
             }
             else if (!m_sawTalking && now - m_spokenAt > kStartTalkingMs)
-                m_spokenLive = false;  // (never seen talking: nothing to stop)
+                m_spokenLive = false;
         }
         if (!talking)
             m_lastSpoken = 0;
 
-        // Everyone else's: our copy of the NPC says it (voice, mouth, subtitle) if we're near.
         bool host = m_coop->GetRole() == coop::Role::Host;
         coop::Pose me, at;
         bool placed = GetPose(Player(), me);
@@ -397,7 +370,6 @@ namespace game
                 }
                 continue;
             }
-            // (A new line cuts the last one short, as it did for the talker.)
             StopSound(m_heard);
             EndSubtitle(m_heardText);
             m_heardText = s.text;

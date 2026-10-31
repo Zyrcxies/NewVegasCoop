@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "game/quests.h"
 
 #include "coop/clock.h"
@@ -12,10 +14,10 @@ namespace game
 {
     namespace
     {
-        constexpr uint32_t kLookMs = 1000;        // host: how often quests are checked for changes
-        constexpr size_t kResendPerLook = 16;     // host: started quests sent again each look (all in ~25 s)
+        constexpr uint32_t kLookMs = 1000;
+        constexpr size_t kResendPerLook = 16;
         constexpr uint32_t kQuietAfterJoinMs = 10000;
-        constexpr uint32_t kSwitchedResendMs = 10000;  // host: everything switched on or off, again
+        constexpr uint32_t kSwitchedResendMs = 10000;
 
         net::QuestState ToState(const QuestInfo& q)
         {
@@ -53,17 +55,12 @@ namespace game
 
     void Quests::Enables(coop::Coop& coop, uint32_t now, bool host)
     {
-        std::vector<EnableChange> changes = TakeEnables();  // (a friend's own, ours included, are ignored)
+        std::vector<EnableChange> changes = TakeEnables();
         if (m_loadOrder.empty())
             m_loadOrder = LoadOrder();
-        // (Only things from the game's own files and the host's quest mods: other mods' run in each game, e.g. MCM's
-        // hidden container.)
         auto ours = [&](uint32_t ref) { return coop::HostRunsQuestsOf(ref, m_loadOrder, coop.QuestMods()); };
         if (host)
         {
-            // Quest scripts make NPCs and objects appear and go this way (two-PC test, 2026-10-15: Trudy's Powder
-            // Gangers never appeared on the laptop). Sent at once; all of them again every few seconds, so a friend
-            // that wasn't near (or joined later) catches up.
             std::vector<net::RefEnable> send;
             for (const EnableChange& c : changes)
             {
@@ -94,7 +91,7 @@ namespace game
             ++m_enablesSet;
             LOG_DEBUG("Quests: %08X switched %s (as on the host)", e.ref, e.enabled ? "on" : "off");
         }
-        TakeEnables();  // (ours, just made)
+        TakeEnables();
     }
 
     void Quests::Update(coop::Coop& coop, uint32_t now)
@@ -136,7 +133,7 @@ namespace game
         prints.reserve(m_prints.size());
         QuestFingerprints(prints);
         std::vector<net::QuestState> send;
-        bool everything = coop.Joins() != m_joins;  // a friend joined: every started quest
+        bool everything = coop.Joins() != m_joins;
         if (m_loadOrder.empty())
             m_loadOrder = LoadOrder();
         m_joins = coop.Joins();
@@ -144,8 +141,6 @@ namespace game
         {
             bool changed = i >= m_prints.size() || m_prints[i] != prints[i];
             bool again = !prints.empty() && i >= m_resendAt && i < m_resendAt + kResendPerLook;
-            // (Only the game's own quests and the host's quest mods' are shared: other mods' run in each game, e.g.
-            // MCM's menu.)
             if ((!changed && !everything && !again) ||
                 !coop::HostRunsQuestsOf(prints[i].first, m_loadOrder, coop.QuestMods()))
                 continue;
@@ -170,8 +165,6 @@ namespace game
     {
         if (!m_detachedAll)
         {
-            // Our quest scripts would change our world on their own: the host's game runs the story (DESIGN).
-            // (Only the game's own quests and the host's quest mods': other mods' keep running here, e.g. MCM's menu.)
             m_loadOrder = LoadOrder();
             m_detached = DetachQuestScripts([](uint32_t id, const void* c) {
                 auto* q = static_cast<const Quests*>(c);
@@ -190,9 +183,6 @@ namespace game
             net::QuestState before = ToState(mine);
             if (before == host)
                 continue;
-            // Objectives the game's way first: only that updates the player's own objective list (the Pip-Boy,
-            // map markers and the game's quest messages; two-PC test, 2026-10-15: written directly, the laptop's
-            // Pip-Boy never showed Back in the Saddle's new objective).
             int commands = 0;
             for (const net::QuestObjective& o : host.objectives)
             {
@@ -208,7 +198,6 @@ namespace game
             coop::QuestNews news = coop::CompareQuest(before, host);
             if (news.completed)
                 commands += CompleteQuest(host.quest);
-            // Then everything exactly as the host has it (flags, stage, stages done), written directly.
             QuestInfo q;
             q.id = host.quest;
             q.flags = host.flags;

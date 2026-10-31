@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "game/escape_menu.h"
 
 #include "game/addresses.h"
@@ -13,10 +15,9 @@ namespace game
     {
         using MenuModeFn = bool(__cdecl*)();
         constexpr int kCalls = static_cast<int>(sizeof(addr::kMenuModeCalls) / sizeof(addr::kMenuModeCalls[0]));
-        MenuModeFn g_before[kCalls] = {};  // what each call went to before ours (Real Time Menus', or the game's own)
+        MenuModeFn g_before[kCalls] = {};
         bool g_live = false;
 
-        // Each call's own hook: the answer it had, but "not paused" for the Escape menu while it's to stay live.
         template <int I>
         bool __cdecl InMenuMode()
         {

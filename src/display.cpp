@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "display.h"
 
 #include "log.h"
@@ -12,7 +14,7 @@ namespace display
         decltype(&GetPrivateProfileStringA) g_getString = nullptr;
         decltype(&GetPrivateProfileIntA) g_getInt = nullptr;
         decltype(&WritePrivateProfileStringA) g_writeString = nullptr;
-        bool g_wantedFullScreen = false;  // what the player's INI says (the last file read that has it: FalloutPrefs.ini)
+        bool g_wantedFullScreen = false;
         bool g_done = false;
 
         bool IsFullScreenKey(LPCSTR section, LPCSTR key)
@@ -20,7 +22,6 @@ namespace display
             return section && key && _stricmp(section, "Display") == 0 && _stricmp(key, "bFull Screen") == 0;
         }
 
-        // Whether this file has the key itself (not the game's fallback).
         bool InFile(LPCSTR section, LPCSTR key, LPCSTR file)
         {
             char probe[24];
@@ -57,11 +58,10 @@ namespace display
         BOOL WINAPI WriteString(LPCSTR section, LPCSTR key, LPCSTR value, LPCSTR file)
         {
             if (IsFullScreenKey(section, key) && value)
-                value = g_wantedFullScreen ? "1" : "0";  // (their own choice stays in their INI)
+                value = g_wantedFullScreen ? "1" : "0";
             return g_writeString(section, key, value, file);
         }
 
-        // The game's import of `function` pointed at `replacement`; the one it had back (null if it isn't there).
         void* PatchImport(const char* dll, const char* function, void* replacement)
         {
             auto* base = reinterpret_cast<uint8_t*>(GetModuleHandleA(nullptr));
@@ -108,7 +108,6 @@ namespace display
             PatchImport("KERNEL32.dll", "GetPrivateProfileIntA", reinterpret_cast<void*>(GetInt)));
         g_writeString = reinterpret_cast<decltype(g_writeString)>(
             PatchImport("KERNEL32.dll", "WritePrivateProfileStringA", reinterpret_cast<void*>(WriteString)));
-        // (All three or none: a reader without its writer would change the player's INI.)
         if (!g_getString || !g_getInt || !g_writeString)
         {
             if (g_getString)

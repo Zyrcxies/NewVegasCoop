@@ -1,17 +1,14 @@
-#pragma once
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
 
-// Simple log file: NVCoop.log in the game folder. Thread-safe.
-// Each line: time, level, message. Use LOG_INFO("joined %s", name) etc. Lines reach the file within 200 ms (written
-// by a thread of ours, so the game never waits for the disk); errors at once.
+#pragma once
 
 enum class LogLevel { Debug, Info, Warn, Error };
 
 namespace Log
 {
-    // Opens NVCoop.log; if another game on this PC already has it open, NVCoop-2.log, etc.
     void Open(const char* folder);
     void EchoToConsole(bool on);
-    void Flush();  // every line so far into the file now (the game closing, a crash)
+    void Flush();
     void Write(LogLevel level, const char* fmt, ...);
 }
 

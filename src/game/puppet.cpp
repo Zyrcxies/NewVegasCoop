@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "game/puppet.h"
 
 #include "coop/clock.h"
@@ -15,24 +17,17 @@ namespace game
     namespace
     {
         constexpr uint32_t kWeaponCheckEveryMs = 250;
-        constexpr uint32_t kDrawTakesMs = 800;  // checked again after this (drawing is an animation)
-        constexpr float kPutBackDistance = 200;   // further off than this: put it back where it should be
-        constexpr float kTurnAtLeast = 0.01f;     // radians
-        constexpr uint32_t kPutBackPauseMs = 300; // a put-back shows up a frame or two later: don't repeat it
-        // Catching up (Alex, 2026-10-30: it ran as fast as they did, so stayed 340 ms behind while they ran): its speed
-        // goes up 20% for each 100 ms it's behind their newest position (the way they move), down when ahead, within
-        // these, set again when it changes this much (at most every kSpeedEveryMs). The game plays its walk and run
-        // faster too: no sliding. (By time, not distance: at walking pace 200 ms is only 20 units.)
+        constexpr uint32_t kDrawTakesMs = 800;
+        constexpr float kPutBackDistance = 200;
+        constexpr float kTurnAtLeast = 0.01f;
+        constexpr uint32_t kPutBackPauseMs = 300;
         constexpr int kSpeedMultMin = 75, kSpeedMultMax = 135, kSpeedMultStep = 5;
         constexpr float kSpeedPerSecondBehind = 200;
         constexpr uint32_t kSpeedEveryMs = 150;
         constexpr float kPi = 3.14159265f;
-        // Movement flags copied: direction, turning, walk/run/sneak/swim, jump/fly/fall/slide. Not
-        // "Keyboard" (0x40): it says how the PLAYER is controlled.
         constexpr uint32_t kCopiedFlags = 0xFFBF;
-        // What "its legs took the flags" means: same direction and pace (the game may change the rest).
         constexpr uint32_t kTakenMask = 0x030F;
-        constexpr uint32_t kDirectionMask = 0x000F;  // forward, backward, left, right
+        constexpr uint32_t kDirectionMask = 0x000F;
 
         float AngleDiff(float a, float b)
         {
@@ -67,7 +62,6 @@ namespace game
         if (!actor || !GetPose(actor, at))
             return;
 
-        // How fast that spot moves (smoothed a little: frame times jitter).
         if (m_lastWantAt && now != m_lastWantAt)
         {
             float dt = static_cast<float>(now - m_lastWantAt) / 1000.0f;
@@ -78,9 +72,6 @@ namespace game
         m_lastWantY = want.y;
         m_lastWantAt = now;
 
-        // Legs: steered onto the spot, and held so its AI can't take them back. (A game that doesn't
-        // send movement flags, like the fake friend's, still says whether they sneak.) What they do (start, stop, jump,
-        // draw) is taken from their newest pose, not the smoothed one, which lags 50 ms (Alex, 2026-10-30: delay).
         const coop::Pose& doing = latest && latest->space == at.space ? *latest : want;
         uint32_t theirs = (doing.moves & kCopiedFlags) | ((doing.flags & coop::Pose::kSneaking) ? coop::moves::kSneaking : 0);
         coop::Steer::Input in{at.x, at.y, want.x, want.y, m_wantVx, m_wantVy, want.heading, theirs};
@@ -89,10 +80,7 @@ namespace game
             ++m_gaitChanges;
         m_wasMoving = m_steer.Moving();
         m_wasRunning = m_steer.Running();
-        // Behind them: the distance to their newest pose, in time at the speed they move (only while moving).
         float speed = std::sqrt(m_wantVx * m_wantVx + m_wantVy * m_wantVy);
-        // Their own speed is the base (a sprint mod raises it: Enhanced Movement's sprint is +80%, a drawn rifle -18%):
-        // their running speed against its own at 100%, caught up around it.
         if (float run = CachedRunSpeed(actor); run > 0 && m_speedMult > 0)
             m_ownRunSpeed = run * 100.0f / static_cast<float>(m_speedMult);
         int base = 100;
@@ -105,7 +93,7 @@ namespace game
         if (m_steer.Moving() && speed > 30)
         {
             const coop::Pose& target = latest && latest->space == at.space ? *latest : want;
-            float along = ((target.x - at.x) * m_wantVx + (target.y - at.y) * m_wantVy) / speed;  // + behind
+            float along = ((target.x - at.x) * m_wantVx + (target.y - at.y) * m_wantVy) / speed;
             int catchUp = 100 + static_cast<int>(along / speed * kSpeedPerSecondBehind);
             catchUp = catchUp < kSpeedMultMin ? kSpeedMultMin : catchUp > kSpeedMultMax ? kSpeedMultMax : catchUp;
             mult = base * catchUp / 100;
@@ -127,8 +115,6 @@ namespace game
             m_behindMax = behind > m_behindMax ? behind : m_behindMax;
             ++m_behindCount;
         }
-        // What became of last frame's ask: a real NPC's AI can fight the legs (step 5 lab: a farmer and a
-        // shopkeeper wouldn't follow, Doc Mitchell did).
         if (m_asked)
         {
             MoverState s = ReadMover(actor);
@@ -214,15 +200,14 @@ namespace game
             LOG_DEBUG("%s now wears %zu items", m_who.c_str(), m_worn.size());
     }
 
-    // Drawn or put away, like them. Told once per change, then checked: drawing takes a moment (the animation).
     void Puppet::UpdateWeaponOut(TESObjectREFR* actor, bool want, uint32_t now)
     {
         if (want != m_weaponOut)
         {
             m_weaponOut = want;
             if (want && InScriptAnimation(actor))
-                StopIdle(actor);  // an idle (looping ones never end) holds the weapon back (step 5.3 test)
-            SetAlert(actor, want);  // its AI puts the weapon away again after ~0.6 s unless it's alert (seen in the lab)
+                StopIdle(actor);
+            SetAlert(actor, want);
             SetWeaponOut(actor, want);
             m_nextWeaponCheck = now + kDrawTakesMs;
             LOG_DEBUG("%s: told it to %s its weapon", m_who.c_str(), want ? "draw" : "put away");
@@ -234,8 +219,6 @@ namespace game
         bool out = (StanceFlags(actor) & coop::Pose::kWeaponOut) != 0;
         if (out != want)
         {
-            // (Step 5.3 test: two NPC copies never drew. What they were doing: animation action, idle, and the
-            // inspector's AI bits: +4 fighting, +8 restrained, +16 knocked, +128 sitting, /2048 package+1.)
             uint32_t ai = 0;
             AiStateBits(actor, ai);
             LOG_INFO("%s: its weapon is %s but should be %s; telling it again (action %d, idle %08X, AI bits %u)",
@@ -254,12 +237,10 @@ namespace game
             return;
         if (release)
         {
-            // Their throw left their hand: ours throws the harmless grenade (or mine) now (step 8.8).
             ReleaseThrow(actor, m_worn);
             LOG_DEBUG("%s's throw left its hand", m_who.c_str());
             return;
         }
-        // Attacking with the weapon away left it stuck, unable to draw again (seen in the lab).
         if (!(StanceFlags(actor) & coop::Pose::kWeaponOut))
         {
             LOG_DEBUG("%s: didn't attack (%u shots): its weapon isn't out", m_who.c_str(), shots);
@@ -277,7 +258,6 @@ namespace game
         m_nextStats = now + m_statsEveryMs;
         if (first || m_frames == 0)
             return;
-        // 64 game units is about 1 metre.
         LOG_INFO("%s: off by %.0f on average (most %.0f) units; put back %u times; jumped %u times; legs took %u ms "
             "on average (most %u) for %u changes", m_who.c_str(), m_errorSum / m_frames, m_errorMax, m_snaps, m_jumps,
             m_lagCount ? m_lagSum / m_lagCount : 0, m_lagMax, m_lagCount);

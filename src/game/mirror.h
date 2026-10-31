@@ -1,8 +1,6 @@
-#pragma once
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
 
-// Puppet lab (DESIGN step 1): an actor copies our player, a little to the east and 100 ms behind (as the
-// network will deliver a friend), driven like a friend's puppet (game::Puppet). Logs how well it keeps up.
-// Developer tool: "coop mirror". Only call from the game thread.
+#pragma once
 
 #include "coop/smoothing.h"
 #include "game/puppet.h"
@@ -18,9 +16,9 @@ namespace game
     public:
         void Start(TESObjectREFR* actor);
         void Stop();
-        uint32_t Copier() const { return m_refId; }  // ref id of the actor copying us, 0 if none
-        void Update(uint32_t now);                    // every frame
-        void Attack(uint8_t shots, bool release = false);  // we attacked (game::TakeMyAttacks)
+        uint32_t Copier() const { return m_refId; }
+        void Update(uint32_t now);
+        void Attack(uint8_t shots, bool release = false);
 
     private:
         uint32_t m_refId = 0;

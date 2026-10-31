@@ -1,7 +1,6 @@
-#pragma once
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
 
-// Hosting through two connections at once (step 8.5): Steam friends, plus the IP connection when a developer
-// setting asks for it (labs). The second one's peers are numbered from kSecond. Game-independent.
+#pragma once
 
 #include "net/transport.h"
 
@@ -27,7 +26,6 @@ namespace net
         }
         bool Poll(Event& out) override
         {
-            // Taking turns, so a busy one can't starve the other.
             m_secondFirst = !m_secondFirst;
             for (int i = 0; i < 2; ++i)
                 if ((m_secondFirst == (i == 0)) ? PollSecond(out) : m_first.Poll(out))

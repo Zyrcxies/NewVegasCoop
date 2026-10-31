@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "game/mirror.h"
 
 #include "coop/clock.h"
@@ -10,11 +12,9 @@ namespace game
 {
     namespace
     {
-        constexpr uint32_t kFeedEveryMs = 50;     // our pose goes in 20 times a second, like over the network
+        constexpr uint32_t kFeedEveryMs = 50;
         constexpr uint32_t kStatsEveryMs = 1000;
         constexpr uint32_t kGearEveryMs = 500;
-        // Game units east of us, so it doesn't stand inside us. Fixed, not "to our right": turning would swing
-        // that spot around us faster than anyone runs (a real friend's puppet stands where they are).
         constexpr float kSideOffset = 120;
     }
 
@@ -62,13 +62,13 @@ namespace game
 
         if (!GetPose(actor, at) || at.space != want.space || !Is3DLoaded(actor))
         {
-            MoveOnto(actor, player);  // other place (or not loaded): fetch it
+            MoveOnto(actor, player);
             return;
         }
         if (!m_madeCompanion)
         {
             m_madeCompanion = true;
-            MakeCompanion(actor);  // like a friend's character: on our side, can't start fights (once it's loaded)
+            MakeCompanion(actor);
         }
         if (coop::IsDue(now, m_nextGear))
         {

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.4
+- New license (LICENSE.txt, now in the download too): use and change it freely, no reuploads; a changed version you share must be meaningfully changed, credit the original, and be open source under the same license (code rewritten or ported from ours, by hand or with AI tools, counts as ours; ideas, features and balance values are free to use).
+- TTW's and New California's quests are shared like the base game's (the host's game runs them for everyone), with nothing to set: before, they ran separately in each player's game unless listed in HostQuestMods.
+- Other starts than Doc Mitchell's house work (TTW's Vault 101, New California, DUST): the quick start question only comes up in Doc's house, co-op set to start from NVCoop.ini no longer waits for New Vegas's tutorial, and a friend's own start can give back the Pip-Boy and fighting it locked (they stayed locked).
+- Fixed the Mod Configuration Menu not opening since 0.1.3: our Co-op Address button in the pause menu got in its way (MCM only shows its own button when the pause menu has its usual buttons). Your address for friends joining by IP is now under MCM > New Vegas Co-op > Show My Address.
+- Co-op balanced: bigger fights from two players on (they started at three). Each enemy that fights the group brings half an extra one with 2 players (about 50% more enemies), a whole one with 3 (twice as many) and one and a half with 4, with at most 8 extras alive at once. And they all come now: when many enemies started fighting at once, some never did.
+- Co-op balanced: ammo is worth twice as much (vendors charge double for it; selling it pays more too), and boxes and vendors hand out half the rounds they did, on top of giving ammo half as often.
+- Co-op balanced: fewer skill points a level now really works (7 + half your Intelligence instead of the game's 10 + half: the game ignored the setting it used before), and kills give a quarter less XP as meant (by mistake they could give more).
+- A mod's script taking away a perk the host doesn't have (Enhanced Movement does it all the time) is no longer sent to every friend many times a second: a perk a script adds or takes away only goes to friends when it really changes.
+- Fixed a friend's game crashing in big fights: an enemy that died on the friend's screen but not the host's is brought back, and one swinging a melee weapon or its fists right away could crash it.
+- Fixed a crash in the game itself when the console or a mod's script takes all of a character's items (RemoveAllItems) while they wear one of two identical outfits, as freshly placed Powder Gangers do.
+- Fixed a crash choosing how many of an item to take or put in a box (the "how many?" prompt) just as the box's contents were matched to the host's: sharing boxes' contents now waits until the prompt is closed.
+
 ## 0.1.3
 - Fast travel points unlock for everyone: a place any player discovers can be fast travelled to by the whole group (and it stays in everyone's save).
 - A Co-op Teleporter in everyone's Aid items while playing together: use it to go to a friend or bring a friend to you (for when someone gets stuck). It can't be dropped or sold, and it's taken away when co-op ends.

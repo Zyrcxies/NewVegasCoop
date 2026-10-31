@@ -1,9 +1,6 @@
-#pragma once
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
 
-// Who an enemy goes for, among the players (host; Alex, October 2026: in fights with several players, enemies stuck to
-// whoever shot them first). The game picks its own player over a friend's character whatever happens, so the host's
-// game points each enemy a player hurt at the biggest threat: who hurt it most lately (fading), nearer ones a bit more,
-// downed ones not at all. It changes its mind only when another player is clearly ahead, so it doesn't flicker.
+#pragma once
 
 #include <cstdint>
 #include <map>
@@ -14,16 +11,16 @@ namespace coop
     class ThreatTable
     {
     public:
-        static constexpr float kFadeMs = 8000;        // damage counts less with age: gone after this
-        static constexpr float kNearBonus = 15;       // a player right next to it counts as this much damage...
-        static constexpr float kNearRange = 1500;     // ...down to none at this distance (game units)
-        static constexpr float kSwitchMargin = 1.25f; // another player must be this much ahead to be switched to
-        static constexpr uint32_t kForgetMs = 20000;  // an enemy nobody hurt for this long is left to the game
+        static constexpr float kFadeMs = 8000;
+        static constexpr float kNearBonus = 15;
+        static constexpr float kNearRange = 1500;
+        static constexpr float kSwitchMargin = 1.25f;
+        static constexpr uint32_t kForgetMs = 20000;
 
         struct Player
         {
             uint8_t id;
-            float distance;  // from the enemy
+            float distance;
             bool downed;
         };
 
@@ -43,7 +40,6 @@ namespace coop
             e.hurts.push_back({player, damage, now});
         }
 
-        // Which player it should go for now (-1: none of them, e.g. all downed or out of reach: leave it to the game).
         int Pick(uint32_t enemy, const std::vector<Player>& players, uint32_t now)
         {
             auto it = m_enemies.find(enemy);
@@ -66,12 +62,11 @@ namespace coop
                 }
             }
             if (best >= 0 && currentScore >= 0 && best != e.target && bestScore < currentScore * kSwitchMargin)
-                best = e.target;  // (not clearly ahead: stay)
+                best = e.target;
             e.target = best;
             return best;
         }
 
-        // Enemies nobody hurt for kForgetMs (and dead ones, through Forget), to be left to the game.
         std::vector<uint32_t> Stale(uint32_t now) const
         {
             std::vector<uint32_t> out;

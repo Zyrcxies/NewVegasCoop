@@ -2,7 +2,7 @@
 
 A co-op multiplayer mod for Fallout: New Vegas (Steam) for a host and 2-4 friends doing a playthrough together.
 
-Early release (0.1.0): playable start to finish, with bugs. Players: get it from Nexus Mods; the mod page explains
+Early release (0.1.4): playable start to finish, with bugs. Players: get it from Nexus Mods; the mod page explains
 the requirements and how to play. Discord: https://discord.gg/dU3g6CZK8F
 
 
@@ -34,3 +34,7 @@ assistant. No game code is included.
 See [LICENSE](LICENSE). In short: use it and change it however you like; don't reupload the original; you may share
 a meaningfully changed version (or a project using its code) if you credit this project, say it's modified and not
 the official mod, include the license, and publish its full source code under this same license.
+
+**Reusing or rewriting this code?** You're welcome to use the ideas and features. If you copy, port or rewrite the
+code itself, by hand or with an AI tool, the [license](LICENSE) asks you to credit it as "based on New Vegas Co-op by
+Zyrcxies", keep the license notices and use the same license.

@@ -1,8 +1,6 @@
-#pragma once
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
 
-// Shared XP, karma and faction reputation (step 7.2). XP and karma: what any player gains, everyone gains (the game's
-// own way, with its sound and messages). Reputation is the host's world: friends' fame and infamy are set to it.
-// Fast travel: a place anyone can travel to, everyone can.
+#pragma once
 
 #include "coop/coop.h"
 #include "coop/progress.h"
@@ -19,25 +17,23 @@ namespace game
     class Progress
     {
     public:
-        void Update(coop::Coop& coop, uint32_t now);  // every frame
-        void Forget() { m_watcher.Forget(); m_reputationWatcher.Forget(); m_travelWatcher.Forget(); }  // a save loads
-        // Our player just gained this in a way that mustn't be shared as usual (a conversation's line: step 7.4).
+        void Update(coop::Coop& coop, uint32_t now);
+        void Forget() { m_watcher.Forget(); m_reputationWatcher.Forget(); m_travelWatcher.Forget(); }
         void Expect(int32_t xp, int32_t karma) { m_watcher.Expect(xp, karma); }
 
     private:
         void Reputations(coop::Coop& coop, uint32_t now, bool host);
         void Travel(coop::Coop& coop, uint32_t now, bool host);
         coop::ProgressWatcher m_watcher;
-        coop::ReputationWatcher m_reputationWatcher;  // friend: our own game's reputation changes
+        coop::ReputationWatcher m_reputationWatcher;
         coop::TravelWatcher m_travelWatcher;
-        std::vector<TESObjectREFR*> m_mapMarkers;  // every map marker (read once)
+        std::vector<TESObjectREFR*> m_mapMarkers;
         uint32_t m_nextTravelLook = 0, m_travelJoins = 0;
         uint32_t m_nextLook = 0, m_nextReputationLook = 0, m_nextReputationResend = 0;
-        std::map<uint32_t, std::pair<float, float>> m_sentReputations;  // host: as last sent, by form
+        std::map<uint32_t, std::pair<float, float>> m_sentReputations;
         uint32_t m_joins = 0;
-        uint32_t m_quietUntil = 0;  // friend: no messages for the first reputations after joining
+        uint32_t m_quietUntil = 0;
         bool m_wasInGame = false;
-        // Logged now and then (CLAUDE.md: measure).
         int32_t m_sharedXp = 0, m_gotXp = 0;
         uint32_t m_reputationsSet = 0, m_reputationsShared = 0, m_nextLog = 0;
     };

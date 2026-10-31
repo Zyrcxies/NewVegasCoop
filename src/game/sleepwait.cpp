@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "game/sleepwait.h"
 
 #include "coop/clock.h"
@@ -17,17 +19,17 @@ namespace game
 {
     namespace
     {
-        constexpr uint32_t kWaitButton = 4;     // the menu's Wait (or Sleep) button
+        constexpr uint32_t kWaitButton = 4;
         constexpr uintptr_t kMenuSlider = 0x2C;
         constexpr uintptr_t kMenuStarted = 0x44;
         constexpr uintptr_t kMenuSleep = 0x45;
-        constexpr float kClockOffDays = 0.002f;  // a friend's clock this far off the host's (~3 game minutes) is set
-        constexpr uint32_t kClockEveryMs = 1000;  // host: how often we read our clock
+        constexpr float kClockOffDays = 0.002f;
+        constexpr uint32_t kClockEveryMs = 1000;
 
         SleepWait* g_self = nullptr;
-        uintptr_t g_original = 0;    // the click handler before ours (the game's, or another plugin's)
-        bool g_letThrough = false;   // the next Wait click is the vote's: the game handles it
-        constexpr int kWaitQuestion = 1;  // our AskYesNo id
+        uintptr_t g_original = 0;
+        bool g_letThrough = false;
+        constexpr int kWaitQuestion = 1;
 
         void __fastcall ClickHook(void* menu, void*, uint32_t tile, void* target)
         {
@@ -36,7 +38,7 @@ namespace game
             reinterpret_cast<void(__thiscall*)(void*, uint32_t, void*)>(g_original)(menu, tile, target);
         }
 
-        uint8_t* Menu() { return *reinterpret_cast<uint8_t**>(addr::kSleepWaitMenu); }  // null while closed
+        uint8_t* Menu() { return *reinterpret_cast<uint8_t**>(addr::kSleepWaitMenu); }
 
         void* Slider(uint8_t* menu) { return menu ? *reinterpret_cast<void**>(menu + kMenuSlider) : nullptr; }
 
@@ -54,7 +56,6 @@ namespace game
                 reinterpret_cast<void(__thiscall*)(void*, uint32_t, float, bool)>(addr::kTileSetValueFloat)(tile,
                     *reinterpret_cast<uint32_t*>(addr::kSleepWaitHoursValue), hours, true);
         }
-
 
         TESGlobal* Global(uint32_t id)
         {
@@ -96,10 +97,10 @@ namespace game
         if (!m_coop || !m_coop->InGame())
             return true;
         if (m_asking)
-            return false;  // still asking
+            return false;
         auto* m = static_cast<uint8_t*>(menu);
         float slider = SliderHours(m);
-        int hours = static_cast<int>(slider) + 1;  // as the game reads it: the slider counts from 0 (lab: 3 waited 4 h)
+        int hours = static_cast<int>(slider) + 1;
         hours = hours < 1 ? 1 : hours > net::kMaxWaitHours ? net::kMaxWaitHours : hours;
         bool sleep = m[kMenuSleep] != 0;
         m_asking = true;
@@ -116,7 +117,6 @@ namespace game
         uint8_t* menu = Menu();
         if (!mine || !menu || menu[kMenuStarted])
         {
-            // Everyone else (or we closed ours meanwhile): the same menu, opened for us (whatever we're doing).
             if (menu)
                 CloseMenu();
             reinterpret_cast<void(__cdecl*)(bool)>(addr::kShowSleepWaitMenu)(sleep);
@@ -172,7 +172,7 @@ namespace game
             return;
         uint8_t* menu = Menu();
         if (menu && menu[kMenuStarted])
-            return;  // waiting: the clock runs fast; it's set again afterwards
+            return;
         TESGlobal* days = Global(ids::kGameDaysPassed);
         TESGlobal* hour = Global(ids::kGameHour);
         TESGlobal* day = Global(ids::kGameDay);
@@ -187,7 +187,6 @@ namespace game
         day->data = t.day;
         month->data = t.month;
         year->data = t.year;
-        // As after a load: the clock reads them afresh (it keeps its own count otherwise).
         *reinterpret_cast<uint8_t*>(addr::kGameTimeGlobals + addr::kGameTimeReload) = 1;
     }
 
@@ -198,7 +197,6 @@ namespace game
             m_asking = m_popupOpen = false;
             return;
         }
-        // Host: our clock is everyone's.
         if (m_coop->GetRole() == coop::Role::Host && coop::IsDue(now, m_nextClock))
         {
             m_nextClock = now + kClockEveryMs;
@@ -229,14 +227,12 @@ namespace game
         else if (m_coop->GetRole() == coop::Role::Friend)
             FollowHostClock();
 
-        // We were asking and closed the menu: never mind.
         if (m_asking && !Menu())
         {
             m_asking = false;
             m_coop->AskToWait(0, false);
             LOG_INFO("Sleep/wait: we closed the menu; called it off");
         }
-        // Our answer to the question.
         int answer = m_popupOpen ? TakeAnswer(kWaitQuestion) : -1;
         if (answer >= 0)
         {

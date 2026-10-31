@@ -1,8 +1,6 @@
-#pragma once
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
 
-// Developer-only (setting DumpGameCode=1): saves the game's program as it is in memory, for reading in
-// Ghidra. The file on disk is scrambled by Steam's copy protection; in memory it's readable. Runs at the
-// very start (before other plugins change any game code). The file is never shared or committed.
+#pragma once
 
 #include <string>
 

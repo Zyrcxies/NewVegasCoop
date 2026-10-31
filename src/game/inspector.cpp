@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "game/inspector.h"
 
 #include "coop/clock.h"
@@ -16,8 +18,8 @@ namespace game
 {
     namespace
     {
-        constexpr uint32_t kAiEveryMs = 200;      // the AI bits come from a game script: not every frame
-        constexpr uint32_t kMotionEveryMs = 500;  // position and speed lines while moving
+        constexpr uint32_t kAiEveryMs = 200;
+        constexpr uint32_t kMotionEveryMs = 500;
         constexpr uint32_t kMaxLinesPerSecond = 20;
 
         template <typename T>
@@ -26,7 +28,6 @@ namespace game
             return *reinterpret_cast<const T*>(reinterpret_cast<const uint8_t*>(object) + offset);
         }
 
-        // The actor's animation data, or null (far away, no body, or our map of it is wrong).
         const void* AnimDataOf(Actor* actor)
         {
             const void* process = actor->baseProcess;
@@ -51,7 +52,6 @@ namespace game
 
     std::string FurnitureAnim(TESObjectREFR* ref)
     {
-        // Sitting: layer 0 plays the furniture's DynamicIdle file (lab 2026-10-30: a chair, DynamicIdle_ChairSit.kf).
         const void* anim = IsActor(ref) ? AnimDataOf(static_cast<Actor*>(ref)) : nullptr;
         if (!anim || AnimGroupName(Field<uint16_t>(anim, process::kAnimGroupIds)) != "DynamicIdle")
             return "";
@@ -62,7 +62,7 @@ namespace game
 
     namespace
     {
-        std::string FileOf(const char* path)  // its file name, lower case
+        std::string FileOf(const char* path)
         {
             std::string name(path);
             size_t slash = name.find_last_of("\\");
@@ -72,7 +72,6 @@ namespace game
             return name;
         }
 
-        // Each animation of the character's playing from that file (any folder, any case).
         template <typename F> void ForEachPlaying(TESObjectREFR* ref, const std::string& path, F f)
         {
             const void* anim = IsActor(ref) ? AnimDataOf(static_cast<Actor*>(ref)) : nullptr;
@@ -107,8 +106,6 @@ namespace game
 
     std::vector<std::string> ModAnimFiles(TESObjectREFR* ref)
     {
-        // (Lab, 2026-10-30: Enhanced Movement's sprint played characters\_male\em_sprintm\mtfastforward.kf where
-        // the game's own is Characters\_Male\Locomotion\Male\mtfastforward.kf: kNVSE lowers every name it loads.)
         std::vector<std::string> files;
         const void* anim = IsActor(ref) ? AnimDataOf(static_cast<Actor*>(ref)) : nullptr;
         for (int i = 0; anim && i < dev::kAnimLayers; ++i)
@@ -129,8 +126,6 @@ namespace game
 
     void StopAnimFile(TESObjectREFR* ref, const std::string& path)
     {
-        // kNVSE plays a file outside the game's own tracking (PlayGroup Idle didn't end it: lab 2026-10-30), so it's
-        // ended here, eased out.
         ForEachPlaying(ref, path, [](void* sequence)
         {
             using DeactivateFn = bool(__thiscall*)(void* seq, float easeOut, uint8_t transition);
@@ -141,7 +136,6 @@ namespace game
 
     bool IsPlayingAnimFile(TESObjectREFR* ref, const std::string& path, bool loop)
     {
-        // Looped: the downed one plays once (7.5 s) and ended; started again, it popped up between (lab, 2026-10-30).
         bool playing = false;
         ForEachPlaying(ref, path, [&](void* sequence)
         {
@@ -159,7 +153,7 @@ namespace game
         const void* anim = AnimDataOf(static_cast<Actor*>(ref));
         if (!anim)
             return false;
-        uint32_t index = Field<uint16_t>(anim, process::kAnimGroupIds + 2) & 0xFF;  // layer 1: movement
+        uint32_t index = Field<uint16_t>(anim, process::kAnimGroupIds + 2) & 0xFF;
         if (index >= addr::kAnimGroupCount)
             return false;
         auto name = *reinterpret_cast<const char* const*>(addr::kAnimGroupInfos + index * addr::kAnimGroupInfoSize);
@@ -234,7 +228,7 @@ namespace game
 
     void Inspector::Forget()
     {
-        m_lost = false;  // the ref id stays: it's looked up again once a world is loaded
+        m_lost = false;
     }
 
     void Inspector::Update(uint32_t now)

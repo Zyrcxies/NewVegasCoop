@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "game/progress.h"
 
 #include "coop/clock.h"
@@ -12,11 +14,11 @@ namespace game
 {
     namespace
     {
-        constexpr uint32_t kLookMs = 250;               // our XP and karma
-        constexpr uint32_t kReputationLookMs = 1000;    // host: reputations checked for changes
-        constexpr uint32_t kReputationResendMs = 10000; // host: all of them again
+        constexpr uint32_t kLookMs = 250;
+        constexpr uint32_t kReputationLookMs = 1000;
+        constexpr uint32_t kReputationResendMs = 10000;
         constexpr uint32_t kQuietAfterJoinMs = 10000;
-        constexpr uint32_t kTravelLookMs = 2000;        // fast travel: our map markers checked
+        constexpr uint32_t kTravelLookMs = 2000;
     }
 
     void Progress::Update(coop::Coop& coop, uint32_t now)
@@ -40,7 +42,6 @@ namespace game
         m_wasInGame = true;
         bool host = coop.GetRole() == coop::Role::Host;
 
-        // Other players' gains: ours too.
         for (const net::Progress& p : coop.TakeProgress())
         {
             m_watcher.Expect(p.xp, p.karma);
@@ -50,9 +51,6 @@ namespace game
             LOG_DEBUG("Progress: %s gained %d XP and %d karma; so do we", coop.NameOf(p.playerId).c_str(), p.xp,
                 p.karma);
         }
-        // Joined behind the host (a new character, or one that missed sessions): caught up to the host's XP, once
-        // things have settled after joining; the game levels it up as usual (the player picks skills and perks).
-        // Never down, and not shared on as a gain of ours.
         int32_t hostXp = 0;
         if (!host && coop::IsDue(now, m_quietUntil) && coop.TakeHostXp(hostXp))
         {
@@ -103,7 +101,6 @@ namespace game
             m_mapMarkers = MapMarkers();
             LOG_INFO("Progress: %zu map markers", m_mapMarkers.size());
         }
-        // Others' places first (so they aren't sent back as ours).
         std::vector<uint32_t> heard = coop.TakeTravelMarkers();
         std::vector<uint32_t> relay;
         std::string lastName;
@@ -112,9 +109,9 @@ namespace game
         {
             TESObjectREFR* marker = LookupRef(id);
             if (!marker || std::find(m_mapMarkers.begin(), m_mapMarkers.end(), marker) == m_mapMarkers.end())
-                continue;  // not a map marker (only those are unlocked)
+                continue;
             if (m_travelWatcher.Look(id))
-                relay.push_back(id);  // host: a friend's find, to the others
+                relay.push_back(id);
             if (CanTravelTo(marker))
                 continue;
             UnlockTravel(marker);
@@ -132,7 +129,6 @@ namespace game
         if (!coop::IsDue(now, m_nextTravelLook))
             return;
         m_nextTravelLook = now + kTravelLookMs;
-        // Someone new joined: the host tells them every place (friends tell theirs on their first look).
         if (host && coop.Joins() != m_travelJoins)
         {
             m_travelJoins = coop.Joins();
@@ -160,7 +156,6 @@ namespace game
             if (all)
                 m_nextReputationResend = now + kReputationResendMs;
             m_joins = coop.Joins();
-            // Friends' own changes: ours (then sent to everyone below, as changed).
             for (const auto& [playerId, g] : coop.TakeReputationGains())
                 for (const ReputationInfo& r : ReadReputations())
                     if (r.form == g.form)
@@ -170,7 +165,6 @@ namespace game
                         WriteReputation(r.form, fame, infamy);
                         LOG_INFO("Progress: %s's game changed reputation %08X %s (fame %+.0f, infamy %+.0f); so does "
                             "ours", coop.NameOf(playerId).c_str(), r.form, r.name.c_str(), g.fame, g.infamy);
-                        // (Their game showed its own message; the other friends get theirs when they hear ours.)
                         if (!r.name.empty() && g.fame > 0)
                             Notify(("Fame gained with " + r.name).c_str());
                         if (!r.name.empty() && g.infamy > 0)
@@ -199,7 +193,6 @@ namespace game
             m_nextReputationLook = now + kReputationLookMs;
         bool quiet = !coop::IsDue(now, m_quietUntil);
         std::vector<ReputationInfo> mine = ReadReputations();
-        // Our own game's changes first (before the host's are set over them): to the host.
         std::vector<net::ReputationGain> gains;
         for (const ReputationInfo& r : mine)
         {

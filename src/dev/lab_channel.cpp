@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "dev/lab_channel.h"
 
 #include "log.h"
@@ -12,8 +14,6 @@ namespace dev
 {
     namespace
     {
-        // A pipe's default permissions let every account on the PC read it: ours allows this user only
-        // ("D:P(A;;GA;;;<this user's SID>)", nothing inherited).
         bool OnlyThisUser(SECURITY_ATTRIBUTES& sa, PSECURITY_DESCRIPTOR& sd)
         {
             HANDLE token = nullptr;
@@ -60,8 +60,6 @@ namespace dev
             LOG_ERROR("Lab channel: couldn't limit it to this user (error %lu); not opened", GetLastError());
             return false;
         }
-        // One client at a time; refused from other PCs; and we must be the one who made it (nothing else on the
-        // PC can have opened a pipe of that name first to pose as the game).
         HANDLE pipe = CreateNamedPipeW(pipeName.c_str(),
             PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 4096, 4096, 0, &sa);
@@ -142,7 +140,7 @@ namespace dev
             return "stopping";
         if (!answered)
         {
-            m_hasCommand = false;  // (not run later by surprise)
+            m_hasCommand = false;
             return "timeout: the game didn't take it (loading, or not running its frames?)";
         }
         m_hasReply = false;
@@ -157,7 +155,7 @@ namespace dev
             return true;
         CancelIoEx(m_pipe, ov);
         DWORD ignored = 0;
-        GetOverlappedResult(m_pipe, ov, &ignored, TRUE);  // the cancel finishing
+        GetOverlappedResult(m_pipe, ov, &ignored, TRUE);
         return false;
     }
 
@@ -175,7 +173,6 @@ namespace dev
         return GetOverlappedResult(m_pipe, ov, &wrote, FALSE) && wrote == data.size();
     }
 
-    // Pipe thread: wait for a tool, read its lines, answer each, and wait for the next tool.
     void LabChannel::Run()
     {
         OVERLAPPED ov{};
@@ -202,7 +199,7 @@ namespace dev
             }
             LOG_DEBUG("Lab channel: a tool connected");
             std::string pending;
-            bool skipping = false;  // the rest of a line already refused as too long, up to its line break
+            bool skipping = false;
             for (bool open = true; open;)
             {
                 char buffer[512];

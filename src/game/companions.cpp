@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "game/companions.h"
 
 #include "coop/clock.h"
@@ -16,7 +18,7 @@ namespace game
     namespace
     {
         constexpr uint32_t kLookMs = 1000;
-        constexpr uint32_t kHireMs = 5000;  // one in the party this soon after a friend's line: they hired it
+        constexpr uint32_t kHireMs = 5000;
     }
 
     void Companions::FriendLineRan(uint8_t playerId, uint32_t now)
@@ -89,14 +91,12 @@ namespace game
                 SetWaiting(ref, true);
                 LOG_INFO("Companions: %s told %s (%08X) to wait", coop.NameOf(o.playerId).c_str(), Name(ref), o.order.ref);
             }
-            m_nextLook = now;  // (tell everyone at once)
+            m_nextLook = now;
         }
         if (!coop::IsDue(now, m_nextLook))
             return;
         m_nextLook = now + kLookMs;
 
-        // Our player opening the wheel of one a friend has (the nearest, right by us): it's ours again, so the
-        // wheel's follow and wait work.
         if (!m_assigned.empty() && CompanionWheelOpen())
         {
             uint32_t nearest = 0;
@@ -122,8 +122,6 @@ namespace game
                 continue;
             now_.insert(id);
             auto a = m_assigned.find(id);
-            // New in the party just after a friend's line ran here: they hired it, so it follows them (Alex,
-            // October 2026: companions follow whoever recruits them).
             if (a == m_assigned.end() && !m_known.count(id) && m_lineFrom && now - m_lineAt < kHireMs)
             {
                 Follow(id, m_lineFrom, coop, standIns);
@@ -139,11 +137,11 @@ namespace game
                     a = m_assigned.end();
                 }
                 else if (p == m_packages.end() || p->second.target != RefId(leader))
-                    Follow(id, a->second, coop, standIns);  // (their character was made again: aim at the new one)
+                    Follow(id, a->second, coop, standIns);
                 else if (uint32_t doing = InCombat(ref) || !p->second.form ? 0 : CurrentPackage(ref);
                     doing && doing != p->second.form->refID)
                 {
-                    GivePackage(ref, p->second.form);  // (its own scripts gave it another: keep following them)
+                    GivePackage(ref, p->second.form);
                     LOG_DEBUG("Companions: %s (%08X) was doing %08X; following %s again", Name(ref), id, doing,
                         coop.NameOf(a->second).c_str());
                 }
@@ -152,7 +150,6 @@ namespace game
                 coop::kHostPlayerId;
             states.push_back({id, leader});
         }
-        // Gone from the party (fired, dead): our follow package goes too.
         std::vector<uint32_t> gone;
         for (const auto& [id, player] : m_assigned)
             if (!now_.count(id))

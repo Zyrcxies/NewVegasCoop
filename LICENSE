@@ -13,7 +13,12 @@ as published by the author.
    and so on), except by linking to the author's own pages.
 
 3. Modified versions. You may distribute a version you have meaningfully changed, or another work that contains
-   code taken from the Software (either one a "Modified Version"), in source or built form, as long as:
+   code taken from the Software (either one a "Modified Version"), in source or built form. "Code taken from the
+   Software" includes code that is copied, translated into another programming language, ported, reorganized or
+   rewritten from the Software, whether by hand or with the help of automated tools (such as code generators or AI
+   assistants), whenever the result is based on the Software's own code and not written independently. Ideas,
+   features and game balance values are not restricted by this license; the code that expresses them is. You may
+   distribute a Modified Version as long as:
    a. the changes are substantial: a renamed, repackaged or trivially altered copy of the Software is not a
       Modified Version and falls under section 2;
    b. it clearly credits the original ("based on New Vegas Co-op by Zyrcxies") with a link to the original project;
@@ -24,10 +29,17 @@ as published by the author.
       charge, under this same license, for as long as you distribute it. Anyone may then use, change and share it
       on these same terms, and the same applies to anything derived from it in turn.
 
-4. Other people's work. Parts of the project come from others under their own licenses (for example xNVSE in
+4. Notices. You may not remove or change the copyright, license or credit notices in the Software's files, except to
+   add your own alongside them.
+
+5. Ending of rights. If you break this license, your rights under it end automatically. They come back if you fix
+   every breach within 30 days of being told about it, the first time this happens. Anyone who received the Software
+   or a Modified Version from you keeps their rights as long as they follow this license.
+
+6. Other people's work. Parts of the project come from others under their own licenses (for example xNVSE in
    external/). Those parts are covered by their own licenses, not this one.
 
-5. No warranty. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+7. No warranty. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
    LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
    SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM, OUT OF OR IN CONNECTION WITH
    THE SOFTWARE OR ITS USE.

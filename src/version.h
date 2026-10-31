@@ -1,5 +1,6 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #pragma once
 
-// Bump with every release. PLUGIN_VERSION is the number xNVSE sees.
-#define NVCOOP_VERSION_STRING "0.1.3"
-#define NVCOOP_VERSION_NUMBER 13
+#define NVCOOP_VERSION_STRING "0.1.4"
+#define NVCOOP_VERSION_NUMBER 14

@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "coop/containers.h"
 
 #include <map>
@@ -8,7 +10,6 @@ namespace coop
     std::vector<net::ItemCount> ItemDiff(const std::vector<net::ItemCount>& from,
         const std::vector<net::ItemCount>& to)
     {
-        // (By kind: the same gun at another condition, or with other mods, is another kind.)
         std::map<std::tuple<uint32_t, uint8_t, uint8_t>, int64_t> change;
         for (const net::ItemCount& i : to)
             change[{i.item, i.health, i.mods}] += i.count;
@@ -37,13 +38,11 @@ namespace coop
     {
         if (!m_ref)
             return {};
-        // (Only aimed at: anything that changed it wasn't our player.)
         if (m_hasSnapshot && m_open)
             for (const net::ItemCount& d : ItemDiff(m_snapshot, local))
-                changes.push_back({m_ref, ++m_seq, d});  // it gained: put in; it lost: taken out
+                changes.push_back({m_ref, ++m_seq, d});
         m_snapshot = local;
         m_hasSnapshot = true;
-        // The host's contents, once they include all our changes (none may still be on the way).
         if (m_hasHost && m_host.ref == m_ref && static_cast<int32_t>(m_host.seen - m_seq) >= 0)
         {
             m_hasHost = false;

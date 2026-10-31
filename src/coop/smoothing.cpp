@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "coop/smoothing.h"
 
 #include <cmath>
@@ -23,8 +25,6 @@ namespace coop
         if (m_count > 0 && static_cast<int32_t>(senderMs - m_snaps[m_count - 1].senderMs) <= 0)
             return;
 
-        // The fastest delivery tells us how the two clocks line up. Creep towards slower deliveries
-        // a little each time so clock drift and changed routes don't leave us lagging forever.
         int32_t offset = static_cast<int32_t>(localMs - senderMs);
         if (!m_hasOffset || offset < m_offset)
             m_offset = offset;
@@ -46,7 +46,6 @@ namespace coop
         if (m_count == 0)
             return false;
 
-        // The moment to show, on the sender's clock.
         uint32_t target = localMs - kDelayMs - static_cast<uint32_t>(m_offset);
         auto before = [target](uint32_t t) { return static_cast<int32_t>(t - target) <= 0; };
 
@@ -63,7 +62,7 @@ namespace coop
                 continue;
             if (a.pose.space != b.pose.space)
             {
-                out = a.pose;  // changed place: jump, don't slide between two different places
+                out = a.pose;
                 return true;
             }
             float t = static_cast<float>(target - a.senderMs) / static_cast<float>(b.senderMs - a.senderMs);
@@ -73,12 +72,12 @@ namespace coop
             out.z = a.pose.z + (b.pose.z - a.pose.z) * t;
             out.heading = LerpAngle(a.pose.heading, b.pose.heading, t);
             out.pitch = a.pose.pitch + (b.pose.pitch - a.pose.pitch) * t;
-            out.flags = a.pose.flags;  // switches, not blended
+            out.flags = a.pose.flags;
             out.moves = a.pose.moves;
             out.runSpeed = a.pose.runSpeed;
             return true;
         }
-        out = m_snaps[m_count - 1].pose;  // no newer update yet: stay at the last one
+        out = m_snaps[m_count - 1].pose;
         return true;
     }
 }

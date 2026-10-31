@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "dev/dump_game.h"
 
 #include "log.h"
@@ -12,7 +14,6 @@ bool DumpGameImage(const std::string& path)
     auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(base + dos->e_lfanew);
     DWORD size = nt->OptionalHeader.SizeOfImage;
 
-    // Copy the whole image; pages that can't be read stay zero.
     std::vector<uint8_t> image(size, 0);
     for (DWORD at = 0; at < size;)
     {
@@ -27,7 +28,6 @@ bool DumpGameImage(const std::string& path)
         at = end;
     }
 
-    // In memory each section sits at its virtual address: make the file say so, so tools load it as-is.
     auto* fileNt = reinterpret_cast<IMAGE_NT_HEADERS32*>(image.data() + dos->e_lfanew);
     fileNt->OptionalHeader.FileAlignment = fileNt->OptionalHeader.SectionAlignment;
     IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(fileNt);

@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "coop/mod_transfer.h"
 
 #include "log.h"
@@ -18,7 +20,6 @@ namespace coop
             return folder;
         }
 
-        // Makes the folder and any missing folders above it.
         bool MakeFolders(const std::string& folder)
         {
             std::string path = WithSlash(folder);
@@ -112,7 +113,6 @@ namespace coop
 
     void ModServer::Run()
     {
-        // The file being sent stays open between its pieces (opening it for each 32 KB was most of the work).
         HANDLE file = INVALID_HANDLE_VALUE;
         std::string openPath;
         for (;;)
@@ -122,7 +122,7 @@ namespace coop
                 std::unique_lock lock(m_mutex);
                 if (m_jobs.empty() && file != INVALID_HANDLE_VALUE)
                 {
-                    CloseHandle(file);  // nothing more asked for now
+                    CloseHandle(file);
                     file = INVALID_HANDLE_VALUE;
                 }
                 m_wake.wait(lock, [&] { return m_stop || !m_jobs.empty(); });
@@ -271,7 +271,7 @@ namespace coop
             if (!Move(downloads + name, data + name))
             {
                 if (hadOld)
-                    Move(backup + name, data + name);  // (the old one back, rather than none)
+                    Move(backup + name, data + name);
                 return error = "couldn't put " + name + " in Data", false;
             }
             LOG_INFO("Mods: put %s in Data", name.c_str());
@@ -284,7 +284,6 @@ namespace coop
                 LOG_INFO("Mods: moved %s (not in the host's game) to the backup", name.c_str());
             }
 
-        // The active plugins: the host's.
         if (Exists(folders.pluginsTxt) && !CopyFileA(folders.pluginsTxt.c_str(), (backup + "plugins.txt").c_str(), FALSE))
             return error = "couldn't back up " + folders.pluginsTxt, false;
         FILE* f = nullptr;
@@ -296,8 +295,6 @@ namespace coop
                 std::fprintf(f, "%s\n", m.name.c_str());
         std::fclose(f);
 
-        // The load order: the game loads plugins by date (masters first), so date them in the host's order, a
-        // minute apart from the game's release.
         SYSTEMTIME release = {2010, 10, 2, 19, 12, 0, 0, 0};
         FILETIME start;
         SystemTimeToFileTime(&release, &start);
@@ -307,7 +304,7 @@ namespace coop
             if (m.kind != net::ModKind::Plugin)
                 continue;
             FILETIME ft{static_cast<DWORD>(when), static_cast<DWORD>(when >> 32)};
-            when += 60ull * 10000000;  // a minute, in 100 ns
+            when += 60ull * 10000000;
             HANDLE h = CreateFileA((data + m.name).c_str(), FILE_WRITE_ATTRIBUTES,
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
             if (h == INVALID_HANDLE_VALUE || !SetFileTime(h, nullptr, nullptr, &ft))

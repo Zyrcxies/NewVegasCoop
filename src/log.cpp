@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "log.h"
 
 #include <chrono>
@@ -14,16 +16,12 @@
 namespace
 {
     std::FILE* g_file = nullptr;
-    // Lines wait in g_pending (g_mutex: held only to add or take them) and a thread of ours writes them to the file
-    // every 200 ms (g_fileMutex: one writer at a time, in order), so the game never waits for the disk (Alex,
-    // 2026-10-19: hitches; every line had been written and flushed on the spot). Errors are written at once, with
-    // everything before them (a crash's lines must reach the file).
     std::mutex g_mutex, g_fileMutex;
     std::condition_variable g_wake;
     std::vector<std::string> g_pending;
     size_t g_dropped = 0;
     bool g_console = false;
-    constexpr size_t kMaxPending = 20000;  // (the disk stuck for long: new lines dropped, and counted)
+    constexpr size_t kMaxPending = 20000;
 
     const char* LevelName(LogLevel level)
     {
@@ -36,7 +34,6 @@ namespace
         }
     }
 
-    // Takes the waiting lines and writes them (call without g_mutex).
     void WriteWaiting()
     {
         std::lock_guard file(g_fileMutex);
@@ -80,8 +77,6 @@ void Log::Open(const char* folder)
             const char* suffix = i == 1 ? "" : (i == 2 ? "-2" : (i == 3 ? "-3" : "-4"));
             std::snprintf(path, sizeof(path), "%sNVCoop%s.log", folder, suffix);
             std::snprintf(previous, sizeof(previous), "%sNVCoop%s.previous.log", folder, suffix);
-            // Keep the last run's log: after a crash or freeze, the next start would otherwise wipe it.
-            // (Fails harmlessly if another running game has this log open.)
             MoveFileExA(path, previous, MOVEFILE_REPLACE_EXISTING);
             g_file = _fsopen(path, "w", _SH_DENYWR);
         }
@@ -93,7 +88,7 @@ void Log::Open(const char* folder)
         std::thread(Writer).detach();
         std::atexit(Log::Flush);
     }
-    catch (...)  // (no thread: lines are written when an error comes, or Flush is called)
+    catch (...)
     {
     }
 }

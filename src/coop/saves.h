@@ -1,19 +1,15 @@
-#pragma once
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
 
-// Linked saves (step 8.3, DESIGN rule 3): when the host saves, every friend's game saves too, named after the
-// host's save; loading the host's save loads each friend's matching one. The names come from another PC, so they
-// are untrusted: only plain characters, no folders, short. Game-independent: tested in tests/.
+#pragma once
 
 #include <string>
 #include <string_view>
 
 namespace coop
 {
-    constexpr size_t kMaxSaveName = 100;     // the host's save's name
-    constexpr size_t kMaxSaveHostName = 32;  // the host's player name, as it goes into a friend's save name
+    constexpr size_t kMaxSaveName = 100;
+    constexpr size_t kMaxSaveHostName = 32;
 
-    // A save's name from its file name ("Quicksave.fos" -> "Quicksave"); "" if it can't be one of ours to share:
-    // empty, too long, a folder in it, or a character outside letters, digits, space and - _ . , ( ) '.
     inline std::string SaveNameOf(std::string_view file)
     {
         if (file.size() > 4 && (file.substr(file.size() - 4) == ".fos" || file.substr(file.size() - 4) == ".FOS"))
@@ -28,12 +24,10 @@ namespace coop
                 return "";
         }
         if (file.front() == ' ' || file.front() == '.' || file.back() == ' ' || file.back() == '.')
-            return "";  // (Windows trims these: two names could meet)
+            return "";
         return std::string(file);
     }
 
-    // A player's name cut down for a save name: letters, digits, space, - and _ only (others dropped), at most
-    // kMaxSaveHostName, no spaces at the ends; `otherwise` if nothing is left.
     inline std::string PlainName(std::string_view name, const char* otherwise)
     {
         std::string who;
@@ -48,25 +42,19 @@ namespace coop
         return who.empty() ? otherwise : who;
     }
 
-    // What starts a friend's saves matching this host's: "Co-op - <host> - ".
     inline std::string LinkedSavePrefix(std::string_view host) { return "Co-op - " + PlainName(host, "Host") + " - "; }
 
-    // A friend's save matching the host's: "Co-op - <host> - <host's save>"; "" if the save's name isn't valid
-    // (SaveNameOf).
     inline std::string LinkedSaveName(std::string_view host, std::string_view hostSave)
     {
         std::string save = SaveNameOf(hostSave);
         return save.empty() ? "" : LinkedSavePrefix(host) + save;
     }
 
-    // The host's save of a friend's save (everyone saves when anyone does): "Co-op <friend> <when>", when like
-    // "2026-10-15 23-27-45". A new name each time, so it never replaces one of the host's own saves.
     inline std::string SaveForFriend(std::string_view friendName, std::string_view when)
     {
         return SaveNameOf("Co-op " + PlainName(friendName, "Friend") + " " + std::string(when));
     }
 
-    // The host's save a friend's save matches ("" if it isn't one of the host's linked saves).
     inline std::string HostSaveOf(std::string_view host, std::string_view friendSave)
     {
         std::string name = SaveNameOf(friendSave), prefix = LinkedSavePrefix(host);
@@ -75,7 +63,6 @@ namespace coop
         return SaveNameOf(name.substr(prefix.size()));
     }
 
-    // One of the game's own autosaves (made at doors; the host's already save everyone's).
     inline bool IsAutosave(std::string_view save)
     {
         constexpr std::string_view kAuto = "autosave";

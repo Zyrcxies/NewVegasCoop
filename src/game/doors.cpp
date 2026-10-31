@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "game/doors.h"
 
 #include "coop/clock.h"
@@ -12,10 +14,9 @@ namespace game
 {
     namespace
     {
-        constexpr uint32_t kLookMs = 250;      // how often the doors' states are read
-        constexpr uint32_t kListMs = 2000;     // how often the doors near us are listed again (and on a new cell)
-        // (Outdoors: doors as far as the loaded cells reach, LoadedReach, count as near the group.)
-        constexpr float kMyReach = 400;        // a door this close may be our player's doing
+        constexpr uint32_t kLookMs = 250;
+        constexpr uint32_t kListMs = 2000;
+        constexpr float kMyReach = 400;
 
         double MsSince(const LARGE_INTEGER& start)
         {
@@ -27,11 +28,9 @@ namespace game
 
         bool IsOpen(int openState)
         {
-            return openState == 1 || openState == 2;  // open or opening
+            return openState == 1 || openState == 2;
         }
 
-        // Our game's door, set to `want` (the host's state, or a friend's use on the host). False if it isn't a
-        // door here.
         bool Apply(const net::DoorState& want)
         {
             TESObjectREFR* ref = LookupRef(want.ref);
@@ -83,7 +82,7 @@ namespace game
             QueryPerformanceCounter(&start);
             std::vector<TESObjectREFR*> doors, boxes;
             DoorsNear(doors, LoadedReach());
-            ContainersNear(boxes, LoadedReach());  // (their locks kept the same as doors')
+            ContainersNear(boxes, LoadedReach());
             m_refs.clear();
             for (TESObjectREFR* d : doors)
                 m_refs.push_back(RefId(d));

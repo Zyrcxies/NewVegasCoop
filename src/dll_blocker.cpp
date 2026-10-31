@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "dll_blocker.h"
 
 #include "dll_names.h"
@@ -10,11 +12,10 @@
 namespace
 {
     using LdrLoadDll_t = LONG(NTAPI*)(PWSTR, PULONG, PUNICODE_STRING, PVOID*);
-    LdrLoadDll_t g_loadDll = nullptr;  // the real LdrLoadDll (just past our jump)
+    LdrLoadDll_t g_loadDll = nullptr;
     volatile LONG g_refused = 0;
     constexpr LONG kStatusDllNotFound = static_cast<LONG>(0xC0000135);
 
-    // Every DLL load in the game goes through here, including ones other programs push into it.
     LONG NTAPI LdrLoadDllHook(PWSTR searchPath, PULONG flags, PUNICODE_STRING name, PVOID* module)
     {
         if (name && name->Buffer && IsBlockedDll(name->Buffer, name->Length / sizeof(wchar_t)))
@@ -38,8 +39,6 @@ void BlockCrashingDlls()
         LOG_WARN("Discord's overlay is already in the game; it may crash it (close Discord before starting)");
         return;
     }
-    // Windows' hot-patch spot: "mov edi, edi" at the start, with 5 unused bytes before it. We put a jump to
-    // our function there; the real one carries on 2 bytes in. (Chains to it: other hooks keep working.)
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     auto* fn = ntdll ? reinterpret_cast<uint8_t*>(GetProcAddress(ntdll, "LdrLoadDll")) : nullptr;
     if (!fn)
@@ -60,10 +59,10 @@ void BlockCrashingDlls()
     if (!VirtualProtect(fn - 5, 7, PAGE_EXECUTE_READWRITE, &old))
         return;
     g_loadDll = reinterpret_cast<LdrLoadDll_t>(fn + 2);
-    fn[-5] = 0xE9;  // jmp LdrLoadDllHook
+    fn[-5] = 0xE9;
     *reinterpret_cast<int32_t*>(fn - 4) = static_cast<int32_t>(reinterpret_cast<intptr_t>(&LdrLoadDllHook) -
         reinterpret_cast<intptr_t>(fn));
-    *reinterpret_cast<volatile uint16_t*>(fn) = 0xF9EB;  // jmp short back to it (one write: no half-done jump)
+    *reinterpret_cast<volatile uint16_t*>(fn) = 0xF9EB;
     VirtualProtect(fn - 5, 7, old, &old);
     FlushInstructionCache(GetCurrentProcess(), fn - 5, 7);
     LOG_DEBUG("Watching DLL loads (to keep Discord's overlay out)");

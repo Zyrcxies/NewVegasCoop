@@ -1,7 +1,6 @@
-#pragma once
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
 
-// Containers and bodies (step 6.2): what they hold is the host's. A friend's takes and puts are done in the host's
-// world (or given back if someone got there first); the container a friend has open is kept to the host's.
+#pragma once
 
 #include "coop/coop.h"
 
@@ -14,13 +13,13 @@ namespace game
     class Containers
     {
     public:
-        void Update(coop::Coop& coop, uint32_t now, const Npcs& npcs);  // every frame
+        void Update(coop::Coop& coop, uint32_t now, const Npcs& npcs);
 
     private:
         void HostApply(coop::Coop& coop);
         void FriendLook(coop::Coop& coop, const Npcs& npcs);
         uint32_t m_nextLook = 0;
-        // Logged now and then (CLAUDE.md: measure).
+        bool m_waitedForPrompt = false;
         double m_readMs = 0;
         uint32_t m_reads = 0, m_changes = 0, m_refunds = 0, m_fixes = 0, m_nextLog = 0;
     };

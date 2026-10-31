@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "config.h"
 #include "log.h"
 #include "net/session.h"
@@ -8,8 +10,6 @@
 
 namespace
 {
-    // Mode=auto is for testing two games on one PC: the first one to start hosts,
-    // the next one joins it.
     const char* kDefaultIni =
         "[Coop]\r\n"
         "; menu (Host Co-op and Join Co-op on the main menu), off, or for testing: host, join, or auto (first game on\r\n"
@@ -21,7 +21,7 @@ namespace
         "Name=Player\r\n"
         "; When hosting: quest mods whose quests your game runs for everyone, like the base game's, file names with\r\n"
         "; commas between (e.g. HostQuestMods=Some Quest Mod.esp, Another.esm). Other mods' quests run in each\r\n"
-        "; player's game: leave menu mods like MCM out.\r\n"
+        "; player's game: leave menu mods like MCM out. TTW's and New California's are run for everyone on their own.\r\n"
         "HostQuestMods=\r\n"
         "; Developer-only: 1 lets a second copy of the game run on this PC for testing\r\n"
         "AllowSecondCopy=0\r\n"
@@ -38,7 +38,6 @@ namespace
         return buf;
     }
 
-    // A whole number from the ini (MCM writes "80.0000" for some): within min and max, or the fallback.
     int Number(const std::string& text, int min, int max, int fallback)
     {
         char* end = nullptr;
@@ -56,7 +55,6 @@ namespace
 
 void Config::LoadPlayer(const std::string& path)
 {
-    // Missing (first run, or before the menu was ever used): written with what we have, so the menu shows it.
     if (GetFileAttributesA(path.c_str()) == INVALID_FILE_ATTRIBUTES)
     {
         Write(path, "bChat", chat);
@@ -78,6 +76,7 @@ void Config::LoadPlayer(const std::string& path)
         Write(path, "bDesyncNotices", desyncNotices);
         Write(path, "iFieldOfView", fieldOfView);
         Write(path, "bFriendMarkers", friendMarkers);
+        Write(path, "bShowAddress", showAddress);
     }
     auto flag = [&](const char* key, bool now) {
         return Number(Read(path, key, now ? "1" : "0", "Settings"), 0, 1, now ? 1 : 0) != 0;
@@ -98,7 +97,6 @@ void Config::LoadPlayer(const std::string& path)
     voiceChatKey = number("iVoiceChatKey", voiceChatKey, 1, 255);
     if (number("iSettingsVersion", 0, 0, 1000) < 1)
     {
-        // (The first default was V, which is VATS (Alex): a file from then saying V gets B, once.)
         if (voiceChatKey == 47)
         {
             voiceChatKey = 48;
@@ -114,6 +112,7 @@ void Config::LoadPlayer(const std::string& path)
     desyncNotices = flag("bDesyncNotices", desyncNotices);
     fieldOfView = number("iFieldOfView", fieldOfView, 0, 120);
     friendMarkers = flag("bFriendMarkers", friendMarkers);
+    showAddress = flag("bShowAddress", showAddress);
     if (fieldOfView && fieldOfView < 60)
         fieldOfView = 60;
 }
@@ -170,7 +169,6 @@ Config Config::Load(const std::string& iniPath)
     c.secondCopyWaits = Read(iniPath, "SecondCopyWaits", "0") == "1";
     c.blockDiscordOverlay = Read(iniPath, "BlockDiscordOverlay", "1") != "0";
     c.borderless = Read(iniPath, "Borderless", "1") != "0";
-    // (Older NVCoop.ini files had the player's settings here: they're what the MCM menu's file starts with.)
     c.desyncNotices = Read(iniPath, "DesyncNotices", "1") != "0";
     c.syncRadio = Read(iniPath, "SyncRadio", "1") != "0";
     c.chat = Read(iniPath, "Chat", "1") != "0";

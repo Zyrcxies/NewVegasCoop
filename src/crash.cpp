@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "crash.h"
 
 #include "game/game.h"
@@ -20,13 +22,10 @@ namespace
     LPTOP_LEVEL_EXCEPTION_FILTER g_previous = nullptr;
     LONG g_dumped = 0;
 
-    // Dumps are written by a thread made at the start, with 32 MB of address space kept aside and let go just
-    // before (playthrough test, 2026-10-16: the friend's dumps failed with "device not functioning", likely as the
-    // game had run out of memory; a crashed thread writing its own dump is also what Windows advises against).
     void* g_spare = nullptr;
     HANDLE g_dumpWanted = nullptr, g_dumpDone = nullptr;
     EXCEPTION_POINTERS* g_dumpInfo = nullptr;
-    DWORD g_dumpThread = 0;  // the thread the dump is about
+    DWORD g_dumpThread = 0;
     char g_dumpPath[MAX_PATH];
 
     void Dump(EXCEPTION_POINTERS* info, DWORD thread)
@@ -58,7 +57,7 @@ namespace
     void WriteDump(EXCEPTION_POINTERS* info)
     {
         if (InterlockedExchange(&g_dumped, 1) != 0)
-            return;  // one per run
+            return;
         SYSTEMTIME t;
         GetLocalTime(&t);
         std::snprintf(g_dumpPath, sizeof(g_dumpPath), "NVCoop-crash-%04d%02d%02d-%02d%02d%02d.dmp",
@@ -81,13 +80,11 @@ namespace
         Dump(info, GetCurrentThreadId());
     }
 
-    // A dump of where we are now, for errors that aren't exceptions (the C++ runtime stopping the game).
-    // (No C++ objects here: __try needs a plain function.)
     void DumpHere()
     {
         __try
         {
-            RaiseException(0xE0C00000, 0, 0, nullptr);  // our own code: "NVCoop: runtime error"
+            RaiseException(0xE0C00000, 0, 0, nullptr);
         }
         __except (WriteDump(GetExceptionInformation()), EXCEPTION_EXECUTE_HANDLER)
         {
@@ -101,8 +98,6 @@ namespace
             (m.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
     }
 
-    // Code addresses on the crashed thread's stack, nearest first: most are where calls return to, so they show the
-    // call chain. (No C++ objects here: __try needs a plain function.)
     int ScanStack(uintptr_t esp, uintptr_t* out, int max)
     {
         int n = 0;
@@ -121,7 +116,6 @@ namespace
         return n;
     }
 
-    // "FalloutNV.exe+6A55A6" (our own DLL's as an offset the map file names).
     void Describe(uintptr_t address, char* out, size_t size)
     {
         HMODULE module = nullptr;
@@ -175,7 +169,6 @@ namespace
             LogStack(info->ContextRecord);
             AddressSpace a = GetAddressSpace();
             LOG_ERROR("Address space: %u MB free of %u (4 GB patch: %s)", a.freeMb, a.totalMb, a.large ? "yes" : "NO");
-            // (Two friends' games crashed drawing the world just after a menu opened, 2026-10-19: which one?)
             char menus[96];
             game::OpenMenus(menus, sizeof(menus));
             LOG_ERROR("Menus open: %s", menus[0] ? menus : "none");
@@ -184,8 +177,6 @@ namespace
         return g_previous ? g_previous(info) : EXCEPTION_CONTINUE_SEARCH;
     }
 
-    // The C++ runtime giving up. (2026-10-10: the host's game stopped loading a save with the runtime's "Abort"
-    // popup; nothing was logged, as it isn't an exception.)
 #ifdef _DEBUG
     int __cdecl OnRuntimeReport(int type, char* message, int* returnValue)
     {
@@ -197,9 +188,6 @@ namespace
             DumpHere();
         if (returnValue)
             *returnValue = 0;
-        // Handled: the game goes on. (Playthrough test, 2026-10-16: a stack check after the game's load, likely
-        // another plugin's hook upsetting the register the check keeps the stack in, ended the game. Debug builds
-        // only; a real problem still crashes, and the crash reporter has it.)
         return TRUE;
     }
 #endif
@@ -265,8 +253,6 @@ namespace
                 continue;
             reported = true;
             ++reports;
-            // Only the context and raw stack while it's stopped (nothing that takes a lock it may hold), then
-            // named after it runs again.
             CONTEXT c = {};
             c.ContextFlags = CONTEXT_FULL;
             uintptr_t found[32];
@@ -323,7 +309,7 @@ void InstallCrashReporter()
         if (HANDLE thread = CreateThread(nullptr, 256 * 1024, DumpThread, nullptr, 0, nullptr))
             CloseHandle(thread);
         else
-            g_dumpWanted = g_dumpDone = nullptr;  // (then the crashed thread writes it)
+            g_dumpWanted = g_dumpDone = nullptr;
     }
     g_previous = SetUnhandledExceptionFilter(OnCrash);
 #ifdef _DEBUG
@@ -339,7 +325,6 @@ void CheckCrashReporter()
     LPTOP_LEVEL_EXCEPTION_FILTER current = SetUnhandledExceptionFilter(OnCrash);
     if (current == OnCrash)
         return;
-    // (2026-10-10: the host crashed loading a save and ours never ran.)
     LOG_WARN("Something replaced our crash reporter; put it back in front (theirs still runs after ours)");
     g_previous = current;
 }

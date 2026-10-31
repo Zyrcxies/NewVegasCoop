@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "net/session.h"
 
 #include "log.h"
@@ -65,12 +67,9 @@ namespace net
     namespace
     {
         enum Channel : uint8_t { kReliable = 0, kUnreliable = 1, kChannelCount = 2 };
-        // Messages waiting for the game (it can stop taking them for a while: a loading screen). Past this,
-        // received ones are dropped, so a flood can't eat memory (CLAUDE.md security).
         constexpr size_t kMaxWaitingBytes = 8 * 1024 * 1024;
         constexpr size_t kMaxWaitingEvents = 20000;
 
-        // ENet's own limits (its defaults allow 32 MB packets and 32 MB waiting per peer): ours are far smaller.
         void LimitHost(ENetHost* host)
         {
             host->maximumPacketSize = kMaxMessageSize;
@@ -146,7 +145,7 @@ namespace net
             EnetRelease();
             return false;
         }
-        peer->data = reinterpret_cast<void*>(uintptr_t{1});  // a client's only peer is the host: id 1
+        peer->data = reinterpret_cast<void*>(uintptr_t{1});
         m_isHost = false;
         m_stop = false;
         m_thread = std::thread(&Session::Run, this);
@@ -202,7 +201,6 @@ namespace net
     void Session::Push(Event e)
     {
         std::lock_guard lock(m_eventsMutex);
-        // (Connects and disconnects always get through: they carry no data.)
         if (e.kind == Event::Kind::Received &&
             (m_eventBytes + e.data.size() > kMaxWaitingBytes || m_events.size() >= kMaxWaitingEvents))
         {
@@ -216,14 +214,12 @@ namespace net
         m_events.push_back(std::move(e));
     }
 
-    // Network thread: the only place ENet is used after Start.
     void Session::Run()
     {
         std::unordered_map<PeerId, ENetPeer*> peers;
         PeerId nextId = 1;
         DWORD lastRtt = 0;
 
-        // With fake lag on, messages both ways wait in these first.
         using OutQueue = LagQueue<Command>;
         using InQueue = LagQueue<Event>;
         OutQueue outQueue(m_lag, GetTickCount());
@@ -333,7 +329,6 @@ namespace net
             }
         }
 
-        // Say goodbye so the other side notices right away instead of timing out.
         for (auto& [id, p] : peers)
             enet_peer_disconnect_now(p, 0);
         enet_host_flush(m_host);

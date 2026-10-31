@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "game/items.h"
 
 #include "coop/clock.h"
@@ -16,23 +18,18 @@ namespace game
 {
     namespace
     {
-        constexpr uint32_t kLookMs = 500;     // how often the items near us are listed (walks the loaded cells)
-        // (Outdoors: items as far as the loaded cells reach, LoadedReach, count as near the group.)
-        constexpr float kMyReach = 300;       // an item this close may be our player's pick-up or drop
-        constexpr float kMyPushReach = 600;   // something physics moves (a crate, a tumbleweed) this close: our push
-        // Going to another game's place (step 8.9): gliding there over a bit less than a look, then staying put this
-        // long (a carried one: as long as its carrier keeps saying so, at least every coop::kHeldResendMs); not our
-        // doing while it settles after. At most kMaxGlides at once (more are put there straight away).
+        constexpr uint32_t kLookMs = 500;
+        constexpr float kMyReach = 300;
+        constexpr float kMyPushReach = 600;
         constexpr uint32_t kGlideMs = 450;
         constexpr uint32_t kStayMs = 700;
         constexpr uint32_t kHeldStayMs = 10000;
         constexpr uint32_t kSettleMs = 1500;
         constexpr size_t kMaxGlides = 16;
-        constexpr float kGlideRange = 3000;  // further from our player: put there straight away (saves frame time)
+        constexpr float kGlideRange = 3000;
 
         coop::ItemPose PoseOf(const WorldItem& w) { return {w.x, w.y, w.z, w.rx, w.ry, w.rz}; }
 
-        // (Logs: where it is, and where its 3D is if that's elsewhere.)
         std::string Where(TESObjectREFR* ref)
         {
             WorldItem w = ReadWorldItem(ref);
@@ -49,7 +46,7 @@ namespace game
 
         float AngleBetween(float a, float b, float t)
         {
-            return a + std::remainder(b - a, 6.2831853f) * t;  // (the short way round)
+            return a + std::remainder(b - a, 6.2831853f) * t;
         }
 
         coop::ItemPose Between(const coop::ItemPose& a, const coop::ItemPose& b, float t)
@@ -89,7 +86,6 @@ namespace game
                 LOG_DEBUG("Items: our player carries %08X", grabbed);
         }
         m_grabbed = grabbed;
-        // Items, then things physics moves that aren't items (crates, tumbleweeds: step 8.9).
         std::vector<TESObjectREFR*> refs, movables;
         const float range = LoadedReach();
         ItemsNear(refs, range);
@@ -106,7 +102,7 @@ namespace game
                 WorldItem w = ReadWorldItem(ref);
                 TESObjectREFR* parent = TopEnableParent(ref);
                 if (parent && net::IsMadeWhilePlaying(RefId(parent)))
-                    parent = nullptr;  // (one only our game has: nothing to match)
+                    parent = nullptr;
                 if (w.base && w.count >= 1)
                     states.push_back({RefId(ref), w.base, w.count, IsThere(w), w.x, w.y, w.z, w.rx, w.ry, w.rz,
                         RefId(ref) == m_grabbed, parent ? RefId(parent) : 0, parent && IsEnabled(parent)});
@@ -135,7 +131,6 @@ namespace game
                     local.back().parentOn = IsEnabled(parent);
                 }
             }
-            // Indoors the room, outdoors the worldspace: when it changes, what was near us is gone because we left.
             const void* world = *reinterpret_cast<const void* const*>(
                 reinterpret_cast<const char*>(player->parentCell) + layout::kCellWorldSpace);
             const void* area = world ? world : player->parentCell;
@@ -173,7 +168,7 @@ namespace game
             for (const coop::ItemActions::Move& m : actions.move)
             {
                 if (m.ref == m_grabbed)
-                    continue;  // (our player has it: the host's game hears that from us)
+                    continue;
                 GlideTo(m.ref, {m.x, m.y, m.z, m.rx, m.ry, m.rz}, m.held, now, "the host");
                 ++m_moved;
             }
@@ -203,18 +198,16 @@ namespace game
     {
         for (const coop::Coop::ItemTakeFrom& t : coop.TakeItemTakes())
         {
-            // (Only an item lying here: never a crate, an NPC or a door, whatever a friend's game says.)
             TESObjectREFR* ref = LookupRef(t.take.ref);
             WorldItem w = ReadWorldItem(ref);
             if (IsThere(w) && IsItem(w.base))
             {
-                RemoveWorldItem(ref);  // they have it now
+                RemoveWorldItem(ref);
                 ++m_takes;
                 LOG_DEBUG("Items: %s picked up %08X", coop.NameOf(t.playerId).c_str(), t.take.ref);
             }
             else
             {
-                // Someone was quicker: it comes back out of their inventory.
                 coop.RefundItems(t.playerId, {t.take.base, -t.take.count});
                 ++m_refunds;
                 LOG_DEBUG("Items: %s picked up %08X, already gone here", coop.NameOf(t.playerId).c_str(), t.take.ref);
@@ -230,13 +223,12 @@ namespace game
             }
             else
             {
-                coop.RefundItems(d.playerId, {drop.base, drop.count});  // couldn't: back to them
+                coop.RefundItems(d.playerId, {drop.base, drop.count});
                 ++m_refunds;
                 LOG_WARN("Items: couldn't place %s's drop (%d of %08X); given back", coop.NameOf(d.playerId).c_str(),
                     drop.count, drop.base);
             }
         }
-        // Moved in a friend's game (step 8.9): ours goes there too (not one our player carries: ours wins).
         for (const coop::Coop::ItemMoveFrom& f : coop.TakeItemMoves())
         {
             const net::ItemMove& m = f.move;
@@ -257,7 +249,7 @@ namespace game
         float dx = player ? to.x - player->posX : 0, dy = player ? to.y - player->posY : 0;
         if (fresh && (!Is3DLoaded(ref) || m_glides.size() >= kMaxGlides || dx * dx + dy * dy > kGlideRange * kGlideRange))
         {
-            MoveTo(ref, to);  // (out of sight, or many at once: there straight away)
+            MoveTo(ref, to);
             m_settling[id] = now;
             return;
         }
@@ -273,8 +265,6 @@ namespace game
 
     void WorldItems::Glides(uint32_t now)
     {
-        // (Our player grabbing one: let go of it that same frame, not at the next look. 2026-10-16 test: the host
-        // grabbed a pitcher this game was holding where the friend carried it, and the two ended up apart.)
         uint32_t grabbed = m_glides.empty() ? 0 : GrabbedItem();
         for (auto it = m_glides.begin(); it != m_glides.end();)
         {
@@ -287,7 +277,7 @@ namespace game
                 if (ref)
                     LOG_DEBUG("Items: %08X left at %s%s", it->first, Where(ref).c_str(),
                         it->first == grabbed ? " (our player took it)" : "");
-                m_settling[it->first] = now;  // (let go: it rests or falls from here)
+                m_settling[it->first] = now;
                 it = m_glides.erase(it);
                 continue;
             }

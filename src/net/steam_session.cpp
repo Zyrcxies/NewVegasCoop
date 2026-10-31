@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "net/steam_session.h"
 
 #include "log.h"
@@ -8,11 +10,11 @@ namespace net
 {
     namespace
     {
-        constexpr uint32_t kMagic = 0x4F43564E;  // "NVCO": a connect from co-op, not something else on the channel
+        constexpr uint32_t kMagic = 0x4F43564E;
         constexpr int kChannel = 0;
         constexpr uint8_t kMessage = 0, kConnect = 'C', kAccepted = 'A', kStillHere = 'K', kEcho = 'E', kBye = 'B';
         constexpr uint32_t kConnectEveryMs = 1000, kKeepAliveEveryMs = 1000;
-        constexpr uint32_t kPausedMs = 2000;  // longer between two looks: our game wasn't running (a loading screen)
+        constexpr uint32_t kPausedMs = 2000;
 
         bool Due(uint32_t now, uint32_t at) { return static_cast<int32_t>(now - at) >= 0; }
     }
@@ -73,7 +75,7 @@ namespace net
         auto it = m_peers.find(peer);
         if (it == m_peers.end())
             return;
-        SendControl(it->second.id, kBye, 0, true);  // (after what was sent to them: one channel keeps the order)
+        SendControl(it->second.id, kBye, 0, true);
         Drop(peer, true);
     }
 
@@ -134,7 +136,7 @@ namespace net
                 m_events.push_back(std::move(e));
                 LOG_INFO("Steam: %s connected (connection %u)", Name(from).c_str(), peer);
             }
-            SendControl(from, kAccepted, 0, true);  // (again if they ask again)
+            SendControl(from, kAccepted, 0, true);
             return;
         case kAccepted:
             if (m_isHost || from != m_host || m_connected)
@@ -168,7 +170,6 @@ namespace net
 
     void SteamSession::Pump(uint32_t now)
     {
-        // Our game wasn't running (a loading screen): we couldn't hear anyone, so that's not their silence.
         if (m_lastPump && now - m_lastPump > kPausedMs)
         {
             for (auto& [peer, p] : m_peers)
@@ -180,7 +181,6 @@ namespace net
         SteamId who;
         while (m_steam.TakeSessionRequest(who))
         {
-            // Only friends (as host), or the host (as friend), get through to us at all.
             if (m_isHost ? m_steam.IsFriend(who) : who == m_host)
                 m_steam.Accept(who);
             else
@@ -217,7 +217,7 @@ namespace net
             }
             PeerId peer = PeerOf(who);
             if (!peer || packet.size() < 2 || packet.size() > kMaxMessageSize + 1)
-                continue;  // (only from who we're connected to)
+                continue;
             m_peers[peer].lastHeard = now;
             packet.erase(packet.begin());
             m_events.push_back({Event::Kind::Received, peer, std::move(packet)});
@@ -263,7 +263,6 @@ namespace net
             return false;
         if (m_events.empty())
         {
-            // One look at Steam per round of polls (a frame): what it found, then "no more" till the next round.
             if (m_looked)
                 return m_looked = false;
             Pump(GetTickCount());

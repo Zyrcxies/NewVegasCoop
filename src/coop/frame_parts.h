@@ -1,7 +1,6 @@
-#pragma once
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
 
-// What each part of our per-frame work costs (CLAUDE.md: measure before optimizing): the average and the most of each
-// part over a stretch of frames, and a log line naming the parts worth looking at.
+#pragma once
 
 #include <cstdint>
 #include <cstdio>
@@ -23,8 +22,6 @@ namespace coop
                 m_most[part] = ms;
         }
 
-        // "npcs 0.10 (most 3.20), radio 0.02 (most 1.50)": each part (names[0..count)) averaging at least minAverage
-        // ms a frame over these frames, or taking minMost ms at least once, the costliest first. Then starts over.
         std::string Report(const char* const* names, int count, uint32_t frames, double minAverage, double minMost)
         {
             std::string out;

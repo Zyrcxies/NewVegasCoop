@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "coop/world_items.h"
 
 #include <algorithm>
@@ -10,7 +12,7 @@ namespace coop
     {
         float Turn(float a, float b)
         {
-            return std::fabs(std::remainder(a - b, 6.2831853f));  // (the short way round)
+            return std::fabs(std::remainder(a - b, 6.2831853f));
         }
 
         ItemPose PoseOf(const LocalItem& l) { return {l.x, l.y, l.z, l.rx, l.ry, l.rz}; }
@@ -28,7 +30,7 @@ namespace coop
     {
         if (m_host.size() >= kMaxKnownItems && m_host.find(host.ref) == m_host.end())
         {
-            m_host.clear();  // (a long trip: the host repeats what's near every few seconds)
+            m_host.clear();
             m_heardAt.clear();
         }
         m_host[host.ref] = host;
@@ -40,7 +42,7 @@ namespace coop
         auto it = m_copies.find(hostRef);
         if (it == m_copies.end())
             return;
-        it->second = ourRef;  // (0: couldn't be placed; not tried again until the host's is gone)
+        it->second = ourRef;
         if (ourRef)
             m_seen[ourRef] = {true, m_host[hostRef].count, m_host[hostRef].base, false, PoseOf(m_host[hostRef]),
                 false};
@@ -50,7 +52,7 @@ namespace coop
     {
         m_taken.insert(ourRef);
         if (hostRef)
-            m_copies[hostRef] = 0;  // no copy of it here any more (its id may now be given to something new)
+            m_copies[hostRef] = 0;
     }
 
     void FriendItems::Clear()
@@ -74,17 +76,14 @@ namespace coop
     ItemActions FriendItems::Look(const std::vector<LocalItem>& local, bool sameArea, uint32_t now)
     {
         ItemActions out;
-        std::map<uint32_t, uint32_t> hostOf;  // our copy -> the host's ref
+        std::map<uint32_t, uint32_t> hostOf;
         for (const auto& [hostRef, ours] : m_copies)
             if (ours)
                 hostOf[ours] = hostRef;
 
-        std::map<uint32_t, Seen> looked;  // this look's
+        std::map<uint32_t, Seen> looked;
         for (const LocalItem& l : local)
         {
-            // One we took away, or our player picked up, there again: the game gave its id to something new (it
-            // reuses the ids of items it deleted; two-PC test, 2026-10-15: quick drops after pick-ups went missing,
-            // taken for copies or for drops already sent).
             if (l.present && (m_removed.erase(l.ref) + m_taken.erase(l.ref)) > 0)
             {
                 m_seen.erase(l.ref);
@@ -106,10 +105,6 @@ namespace coop
             auto copy = hostOf.find(l.ref);
             uint32_t hostRef = !made ? l.ref : copy != hostOf.end() ? copy->second : 0;
 
-            // Switched on and off by an enable parent (a quest's marker): our save's may be on where the host's is off
-            // (3-player session, 2026-10-19: Sunny's bottles out in the game of a friend further on in her quest; the
-            // game ignores switching such an item itself). Ours is set as the host's, once a second word from the
-            // host still says so (not undoing the host's script switching it just now, which comes ahead of its word).
             auto parentWord = l.parent && !made ? m_host.find(hostRef) : m_host.end();
             if (parentWord != m_host.end() && parentWord->second.parent == l.parent &&
                 now - m_heardAt[hostRef] <= kHostItemStaleMs)
@@ -130,7 +125,6 @@ namespace coop
                 }
             }
 
-            // Our player picked it up.
             if (wasPresent && !l.present && l.nearMe && hostRef && !l.movable && !m_removed.count(l.ref))
             {
                 out.takes.push_back({hostRef, l.base, was->second.count});
@@ -139,17 +133,10 @@ namespace coop
             }
             if (!l.present)
             {
-                // Gone here but there in the host's game (not our pick-up on its way, nor its word out of date): our
-                // save is behind the host's world (a friend joining with an older save: 3-player session, 2026-10-19,
-                // maize picked in an earlier session stayed gone). Brought back: switched on again if only switched
-                // off (tried once), else, picked up in our save, a copy in its place, as for the host's own drops.
                 auto host = hostRef ? m_host.find(hostRef) : m_host.end();
                 if (host != m_host.end() && host->second.present && now - m_heardAt[hostRef] <= kHostItemStaleMs &&
                     !m_taken.count(l.ref))
                 {
-                    // Only once a newer word from the host still has it: one the host's game just took away (someone
-                    // picked it up there) is switched off here by its script's word, ahead of its next item word
-                    // (3-player session, 2026-10-19: caps a friend picked up came back on in the other friend's game).
                     uint32_t word = m_heardAt[hostRef];
                     bool settled = m_goneHere.emplace(l.ref, word).first->second != word;
                     bool copied = false;
@@ -160,7 +147,7 @@ namespace coop
                         auto copy = m_copies.emplace(hostRef, 0);
                         if (copy.second)
                             out.make.push_back(host->second);
-                        copied = copy.first->second != 0;  // (ours stands in for it)
+                        copied = copy.first->second != 0;
                     }
                     if (!copied)
                         out.differ.push_back({DesyncKind::Item, hostRef, DesyncAspect::There,
@@ -174,11 +161,6 @@ namespace coop
             m_goneHere.erase(l.ref);
             if (made && !hostRef)
             {
-                // Made here, not a copy: our player's drop (sent to the host, who places it for everyone), or
-                // something else our game made (one of our NPC copies' weapons, say): the host's world has the
-                // real ones. Either way it goes.
-                // (Sent once each. Not on the first look: those were lying here before we joined. Not our NPC
-                // copies' harmless weapons either, which exist only in our game.)
                 if (m_started && l.nearMe && !net::IsMadeWhilePlaying(l.base) && m_dropped.insert(l.ref).second)
                     out.drops.push_back({l.base, l.count, l.x, l.y, l.z});
                 out.remove.push_back(l.ref);
@@ -192,7 +174,7 @@ namespace coop
             {
                 out.remove.push_back(l.ref);
                 if (made && !net::IsMadeWhilePlaying(hostRef))
-                    m_copies.erase(hostRef);  // (our copy of one our save had lost: gone with the host's)
+                    m_copies.erase(hostRef);
                 out.differ.push_back({DesyncKind::Item, hostRef, DesyncAspect::There, "here, gone in the host's game"});
                 continue;
             }
@@ -200,14 +182,11 @@ namespace coop
             uint32_t word = m_heardAt[hostRef];
             if (now - word > kHostItemStaleMs)
             {
-                m_own.erase(l.ref);  // out of the host's reach: ours stays as it is, and the host can't take our moves
+                m_own.erase(l.ref);
                 m_holding.erase(l.ref);
                 continue;
             }
 
-            // Our game moved it (step 8.9): our player carrying it, or a push, shot or explosion here, not our taking
-            // it to the host's place. Sent while it moves and where it comes to rest; the host's place is behind ours
-            // until a while after our last move.
             auto own = m_own.find(l.ref);
             bool fresh = own == m_own.end() && (l.held || (was != m_seen.end() && was->second.present && m_started &&
                 sameArea && !l.following && (!l.movable || l.nearMe || was->second.nearMe) &&
@@ -215,7 +194,7 @@ namespace coop
             if (fresh)
             {
                 own = m_own.emplace(l.ref, Own{}).first;
-                m_followed.erase(l.ref);  // (the host's next word counts, whatever it is)
+                m_followed.erase(l.ref);
             }
             if (own != m_own.end())
             {
@@ -231,17 +210,13 @@ namespace coop
                     o.sentAt = now;
                 }
                 if (!l.held && now - o.movedAt >= kOwnItemMs)
-                    m_own.erase(own);  // the host's place counts again from the next look
+                    m_own.erase(own);
                 m_holding.erase(l.ref);
                 continue;
             }
 
-            // The host's place: ours goes there (held there while the host's player carries it, let go after), once
-            // for each word from the host: one that rolls or falls away after is put back by the next (it repeats
-            // what's near every 3 s), not pulled back to an old one again and again (2026-10-16 lab).
             auto followed = m_followed.find(l.ref);
             bool newWord = followed == m_followed.end() || followed->second != word;
-            // (Not while ours is on its way there; not for what the wind rolls in each game its own way.)
             float dx = l.x - h.x, dy = l.y - h.y, dz = l.z - h.z;
             float off = std::sqrt(dx * dx + dy * dy + dz * dz);
             if (!l.following && !l.movable && off > 2 * kItemMoveDistance)
@@ -259,7 +234,6 @@ namespace coop
                 m_holding.erase(l.ref);
         }
 
-        // The host's made items: a copy each while there; gone when the host's is.
         for (auto it = m_host.begin(); it != m_host.end();)
         {
             const net::ItemState& h = it->second;
@@ -278,7 +252,6 @@ namespace coop
             {
                 if (copy != m_copies.end())
                 {
-                    // (One in our list was dealt with above; one out of its reach goes now.)
                     if (copy->second && looked.find(copy->second) == looked.end())
                         out.remove.push_back(copy->second);
                     m_copies.erase(copy);
@@ -289,9 +262,6 @@ namespace coop
             }
             ++it;
         }
-        // Gone from our list altogether, right next to our player, without a trip elsewhere: picked up (a real
-        // pick-up takes the item out of the game's list; one done by a script leaves it there, taken; two-PC
-        // test, 2026-10-15). Copies out of our list's reach for other reasons are kept as they were.
         for (const auto& [ref, seen] : m_seen)
         {
             if (looked.find(ref) != looked.end())
@@ -319,7 +289,6 @@ namespace coop
             it = looked.find(*it) != looked.end() ||
                 std::find(out.remove.begin(), out.remove.end(), *it) != out.remove.end() ? std::next(it) :
                 m_removed.erase(it);
-        // Our own moves of items no longer here are forgotten.
         for (auto it = m_own.begin(); it != m_own.end();)
             it = looked.find(it->first) != looked.end() ? std::next(it) : m_own.erase(it);
         for (auto it = m_holding.begin(); it != m_holding.end();)

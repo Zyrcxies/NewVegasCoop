@@ -1,23 +1,3 @@
-// Fake friend: a pretend second player for testing without a second copy of the game.
-//   fakefriend join [address] [port] [name]   - join a game (default 127.0.0.1 27960 FakeFriend)
-//   fakefriend host [port] [name]             - host, so a game can join it
-//   add hit=<ref id> (from the game console) to also hit that NPC for 10 damage every 2 seconds.
-//   add still to have it just stand where it first saw you, without moving or turning.
-//   As host, it logs the hits the game reports; add hurt to also hurt everyone 5 health every 3 seconds.
-//   add down to have it go down (0 health) 10 seconds after it starts; revive it in game by holding E next to it.
-//   add revive to have it revive anyone who's been down for 3 seconds (it has to be next to them).
-//   add far to have it start 2500 units (about 40 m) in front of you, like a real friend somewhere else.
-//   add attack to have it shoot (or swing) with what it holds every 2 seconds (3 shots every third time).
-//   At 0 health it's down and stops moving until revived or game over.
-//   add record=<file> to write down what you do (moves, gear, shots) while it stands still; Ctrl+C saves.
-//   add replay=<file> to do what the recording did instead of walking (over and over). Same places as when
-//     recorded (load the same save), or add here to start where you stand.
-//   add lag=<ping>[,<jitter>[,<lost %>]] for pretend bad internet, e.g. lag=120,40,5 (both ways).
-//   A file name without a folder goes next to fakefriend.exe.
-// Once it sees another player, it walks in a straight line from where they stood, then jumps back to the
-// start and does it again. Every few seconds it changes how it moves (walk, run, weapon out, sneak, stand).
-// Press Ctrl+C to quit.
-
 #include "coop/coop.h"
 #include "coop/clock.h"
 #include "log.h"
@@ -43,9 +23,8 @@ namespace
         return TRUE;
     }
 
-    constexpr float kWalkDistance = 600;  // game units (about 8.5 m), then back to the start
+    constexpr float kWalkDistance = 600;
 
-    // What it's doing right now; the list repeats. Speed 0: stands and looks around.
     struct Phase { const char* name; uint32_t ms; uint8_t flags; float speed; };
     const Phase kPhases[] = {
         {"walking", 6000, 0, 120},
@@ -56,7 +35,6 @@ namespace
         {"standing still", 4000, 0, 0},
     };
 
-    // Walk away from the first other player we see; start again near them if they go far or change place.
     class Walker
     {
     public:
@@ -82,7 +60,7 @@ namespace
             float dx = them.x - m_start.x, dy = them.y - m_start.y;
             if (!m_hasStart || them.space != m_start.space || (!m_far && dx * dx + dy * dy > 2000.f * 2000.f))
             {
-                m_start = Start(them);  // walks the way they were facing
+                m_start = Start(them);
                 m_hasStart = true;
                 m_lastNow = now;
                 m_walked = 0;
@@ -106,13 +84,12 @@ namespace
             m_walked += (now - m_lastNow) / 1000.f * phase.speed;
             m_lastNow = now;
             if (m_walked > kWalkDistance)
-                m_walked = 0;  // jump back to the start
+                m_walked = 0;
 
-            // Heading: 0 = north (+y), clockwise, so forward is (sin h, cos h).
             coop::Pose me = m_start;
             me.x += m_walked * std::sin(m_start.heading);
             me.y += m_walked * std::cos(m_start.heading);
-            if (phase.speed == 0)  // look left and right, about 45 degrees each way
+            if (phase.speed == 0)
                 me.heading = std::fmod(me.heading + 0.8f * std::sin(now / 1000.f) + 6.2831853f, 6.2831853f);
             me.flags = phase.flags;
             coop.SetMyPose(me);
@@ -120,7 +97,6 @@ namespace
         }
 
     private:
-        // Where to start: where they stand, or with far, 2500 units in front of them.
         coop::Pose Start(coop::Pose them) const
         {
             if (m_far)
@@ -136,7 +112,7 @@ namespace
             for (auto& [_, remote] : coop.Remotes())
                 if (remote.motion.Sample(now, out))
                 {
-                    m_gear = remote.gear;  // dress like them
+                    m_gear = remote.gear;
                     return true;
                 }
             return false;
@@ -152,7 +128,6 @@ namespace
         size_t m_phase = SIZE_MAX;
     };
 
-    // A file name without a folder: next to fakefriend.exe.
     std::string NextToExe(const char* name)
     {
         if (std::strpbrk(name, "\\/:"))
@@ -165,8 +140,6 @@ namespace
 
     constexpr const char* kRecordingHeader = "NVCoop recording 1";
 
-    // Writes down what another player does: where they are (P), what they wear and hold (G) and their
-    // attacks (A), each with the time in ms since the start.
     class Recorder
     {
     public:
@@ -227,7 +200,7 @@ namespace
             if (coop::IsDue(now, m_nextNote))
             {
                 m_nextNote = now + 10000;
-                std::fflush(m_file);  // so closing the window loses little
+                std::fflush(m_file);
                 LOG_INFO("Recorded %u s so far", ms / 1000);
             }
             m_length = ms;
@@ -245,19 +218,17 @@ namespace
     private:
         FILE* m_file = nullptr;
         std::string m_path;
-        int m_who = -1;  // player id being recorded, once seen
+        int m_who = -1;
         uint32_t m_start = 0, m_length = 0, m_nextNote = 0;
         uint32_t m_gearChanges = 0;
         coop::Pose m_last;
     };
 
-    // Plays a recording back as our own moves, gear and attacks, from the start again when it ends.
     class Replayer
     {
     public:
         explicit Replayer(bool here) : m_here(here) {}
 
-        // Checks every line (a bad file is refused, not half played).
         bool Load(const std::string& path)
         {
             FILE* f = nullptr;
@@ -299,7 +270,7 @@ namespace
                 return;
             if (!m_running)
             {
-                coop::Pose them;  // where they stand, for here
+                coop::Pose them;
                 if (m_here && !SeeSomeone(coop, now, them))
                     return;
                 Restart(now, them);
@@ -333,11 +304,11 @@ namespace
         }
 
     private:
-        static constexpr size_t kMaxSteps = 2000000;  // about 9 hours of moving
+        static constexpr size_t kMaxSteps = 2000000;
 
         struct Step
         {
-            char kind;  // P, G or A
+            char kind;
             uint32_t ms;
             coop::Pose pose;
             std::vector<uint32_t> gear;
@@ -347,12 +318,12 @@ namespace
         bool ParseLine(const char* line, uint32_t lastMs)
         {
             if (!std::strchr(line, '\n') && std::strlen(line) >= 1000)
-                return false;  // too long
+                return false;
             Step s{};
             int used = 0;
             if (line[0] == 'P')
             {
-                unsigned flags = 0, moves = 0;  // (older recordings have no movement flags)
+                unsigned flags = 0, moves = 0;
                 int got = sscanf_s(line, "P %u %X %f %f %f %f %u %X", &s.ms, &s.pose.space, &s.pose.x, &s.pose.y,
                     &s.pose.z, &s.pose.heading, &flags, &moves);
                 if (got != 7 && got != 8)
@@ -390,7 +361,7 @@ namespace
             else
                 return false;
             if (s.ms < lastMs)
-                return false;  // time can't go backwards
+                return false;
             s.kind = line[0];
             m_steps.push_back(std::move(s));
             return true;
@@ -432,9 +403,6 @@ namespace
         uint32_t m_space = 0;
     };
 
-    // As host: NPCs "made while playing" around the joined game's player, the way a real host shares spawned ones
-    // (step 5.4). One more every 250 ms up to the count; with cycle, all dropped every 10 s and made again (the
-    // friend deletes its copies and makes new ones). Lab for the friend's copy-making crash.
     class FakeNpcs
     {
     public:
@@ -472,8 +440,6 @@ namespace
         }
 
     private:
-        // From FalloutNV.esm: LvlGoodspringsPowderGanger, WeapNVSingleShotgun, HelmetHockeyMask,
-        // OutfitJumpsuitRepconn.
         static constexpr uint32_t kLvlPowderGanger = 0x0015F315, kShotgun = 0x000E393B;
         static constexpr uint32_t kHockeyMask = 0x00033598, kJumpsuit = 0x00153A0E;
         uint32_t m_count;
@@ -493,7 +459,6 @@ namespace
 
 int main(int argc, char** argv)
 {
-    // hit=<ref id> can go anywhere; the rest are in order.
     uint32_t hitTarget = 0;
     bool hurt = false;
     bool still = false;
@@ -561,7 +526,7 @@ int main(int argc, char** argv)
     if (replayFrom && !replayer.Load(NextToExe(replayFrom)))
         return 1;
     if (recordTo)
-        still = true;  // out of your way while you're recorded
+        still = true;
 
     coop::Coop coop;
     coop.GetSession().SetFakeLag(lag);
@@ -588,14 +553,13 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    // Same rhythm as a game: about 60 updates a second.
     Walker walker(still, startFar);
     FakeNpcs fakeNpcs(npcCount, npcCycle);
     uint32_t nextHit = 0;
     uint32_t nextAttack = 0, attacks = 0;
     float health = 100;
     uint32_t downAt = GetTickCount() + 10000;
-    std::map<uint8_t, uint32_t> sawDown;  // others who are down, since when
+    std::map<uint8_t, uint32_t> sawDown;
     while (!g_quit)
     {
         coop.Update();
@@ -639,7 +603,7 @@ int main(int argc, char** argv)
             {
                 LOG_INFO("Reviving %s", remote.name.c_str());
                 coop.Revive(id);
-                it->second = now;  // again in 3 s if it didn't work
+                it->second = now;
             }
         }
         if (attack && coop.InGame() && health > 0 && coop::IsDue(now, nextAttack))
@@ -664,7 +628,6 @@ int main(int argc, char** argv)
                 LOG_INFO("Hurt %s for 5 (health was %.1f)", remote.name.c_str(), remote.health);
             }
         }
-        // Its own health: hurt by what the host says hit its character.
         if (float damage = coop.TakeDamage(); damage > 0 && health > 0)
         {
             health = health > damage ? health - damage : 0;
@@ -673,6 +636,8 @@ int main(int argc, char** argv)
         coop.SetMyHealth(health, 100);
         for (const coop::HitReport& hit : coop.TakeHits())
             LOG_INFO("Player %u hit %08X for %.1f", hit.playerId, hit.targetRef, hit.damage);
+        for (const net::PlayerCommand& c : coop.TakePlayerCommands())
+            LOG_INFO("Scripted: the host's command %u (%08X %08X)", static_cast<unsigned>(c.kind), c.form, c.ref);
         if (coop.GetRole() == coop::Role::Friend &&
             (coop.GetFriendState() == coop::FriendState::Rejected ||
              coop.GetFriendState() == coop::FriendState::Disconnected))

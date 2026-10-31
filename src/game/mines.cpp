@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "game/mines.h"
 
 #include "coop/clock.h"
@@ -12,8 +14,8 @@ namespace game
 {
     namespace
     {
-        constexpr uint32_t kLookMs = 250;   // how often the mines' states are read
-        constexpr uint32_t kListMs = 2000;  // how often the mines near us are listed again (and on a new cell)
+        constexpr uint32_t kLookMs = 250;
+        constexpr uint32_t kListMs = 2000;
         constexpr size_t kMaxRemembered = 4096;
 
         const char* StateName(uint8_t state)
@@ -47,15 +49,12 @@ namespace game
         TESObjectREFR* ref = LookupRef(id);
         int was = MineState(ref);
         if (was < 0 || was >= state || was >= net::kMineGone)
-            return false;  // (not loaded here, or already so)
+            return false;
         bool done, blown = false;
         if (state == net::kMineOff)
             done = TurnOffMine(ref);
         else if (state == net::kMineBlown && fresh && playerId != coop::kHostPlayerId)
         {
-            // Host: a friend's game blew it up, so ours goes off too, for real: our NPCs (and anyone else) near it are
-            // hurt, and everyone's game shows it. Not the friend again (SparedFrom). The mine goes first (its blast
-            // would set it off too), the blast once it's gone (the next frame or so: Update).
             TurnOffMine(ref);
             RemoveWorldItem(ref);
             if (m_toBlow.size() < 8)
@@ -66,10 +65,10 @@ namespace game
         }
         else
         {
-            RemoveWorldItem(ref);  // (its Disable shows on the ref a frame later: lab 2026-10-19)
+            RemoveWorldItem(ref);
             done = true;
         }
-        uint8_t reached = state > net::kMineGone ? net::kMineGone : state;  // (blown up reads as gone)
+        uint8_t reached = state > net::kMineGone ? net::kMineGone : state;
         m_seen[id] = done ? reached : static_cast<uint8_t>(was);
         if (done)
             ++m_applied;
@@ -80,9 +79,6 @@ namespace game
 
     void Mines::Update(coop::Coop& coop, const StandIns& standIns, uint32_t now)
     {
-        // Who doesn't set mines off here: everyone else's character (it's a puppet; their own game has their
-        // mines), and in a friend's game every NPC for the mines placed in the world (the host's NPCs, in the
-        // host's game, do).
         TESObjectREFR* puppets[8];
         size_t count = 0;
         bool inGame = coop.InGame();
@@ -105,7 +101,7 @@ namespace game
             {
                 bool shown = MineState(ref) == net::kMineGone && MineExplosion(ref);
                 LOG_DEBUG("Mines: %08X's blast %s", m_toBlow[i].id, shown ? "set off here" : "not made (the mine stayed)");
-                m_sparedAt = now;  // (its hits come from now)
+                m_sparedAt = now;
                 m_toBlow.erase(m_toBlow.begin() + i);
             }
             else
@@ -119,7 +115,7 @@ namespace game
             if (m.state <= known)
                 continue;
             known = m.state;
-            Apply(m.ref, m.state, true, from.playerId, now);  // (not loaded here: it's made so when we come near)
+            Apply(m.ref, m.state, true, from.playerId, now);
         }
 
         if (!coop::IsDue(now, m_nextLook))
@@ -129,7 +125,6 @@ namespace game
         if (!player || !player->parentCell)
             return;
 
-        // Changes here go to the others (looked at before listing again, so none is missed in between).
         for (uint32_t id : m_refs)
         {
             TESObjectREFR* ref = LookupRef(id);
@@ -141,15 +136,14 @@ namespace game
             auto seen = m_seen.find(id);
             if (seen == m_seen.end())
             {
-                m_seen[id] = static_cast<uint8_t>(state);  // first look: as it was
+                m_seen[id] = static_cast<uint8_t>(state);
                 if (furthest > state)
-                    Apply(id, furthest, false, 0, now);  // someone else's change from before it was loaded here
+                    Apply(id, furthest, false, 0, now);
                 continue;
             }
             if (state <= seen->second)
                 continue;
             seen->second = static_cast<uint8_t>(state);
-            // Gone: picked up (the ref deleted), or blown up (only disabled: lab 2026-10-19, flags 0x2B and 0x80B).
             uint8_t change = static_cast<uint8_t>(state);
             if (state == net::kMineGone && !(ref->flags & layout::kRefDeleted))
             {
@@ -177,7 +171,7 @@ namespace game
             m_nextList = now + kListMs;
             if (m_seen.size() > kMaxRemembered || m_known.size() > kMaxRemembered)
             {
-                m_seen.clear();  // (a very long session: start over; what's near is looked at afresh)
+                m_seen.clear();
                 m_known.clear();
             }
         }

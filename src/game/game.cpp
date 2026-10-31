@@ -1,4 +1,7 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "game/game.h"
+#include "game/level_up.h"
 #include "coop/chat.h"
 #include "coop/balance.h"
 
@@ -11,6 +14,7 @@
 #include <deque>
 #include <intrin.h>
 
+#include "coop/attack_versions.h"
 #include "coop/clock.h"
 #include "coop/shot_counter.h"
 #include "game/addresses.h"
@@ -26,7 +30,6 @@
 #include <set>
 #include <string>
 
-// xNVSE's headers call this (to free script result text); we provide the game's own function.
 extern const _FormHeap_Free FormHeap_Free = reinterpret_cast<_FormHeap_Free>(game::addr::kFormHeapFree);
 
 namespace game
@@ -36,7 +39,7 @@ namespace game
         NVSEScriptInterface* g_scripts = nullptr;
         NVSEEventManagerInterface* g_events = nullptr;
         NVSEArrayVarInterface* g_arrays = nullptr;
-        NVSEConsoleInterface* g_console = nullptr;  // (the lab channel's console lines)
+        NVSEConsoleInterface* g_console = nullptr;
         bool g_compiled = false;
         Script* g_spawn = nullptr;
         Script* g_bringToPlayer = nullptr;
@@ -47,23 +50,21 @@ namespace game
         Script* g_clone = nullptr;
         Script* g_noTalk = nullptr;
         Script* g_fire = nullptr;
-        Script* g_attackAnim = nullptr;
-        Script* g_throwAnim = nullptr;  // (step 8.8)
-        Script* g_mineAnim = nullptr;
-        Script* g_placeAt = nullptr;  // (step 8.8: an explosion at a spot)
+        std::array<Script*, coop::kAttackVersions> g_attackAnim{};
+        std::array<Script*, coop::kAttackVersions> g_throwAnim{};
+        std::array<Script*, coop::kAttackVersions> g_mineAnim{};
+        Script* g_placeAt = nullptr;
         Script* g_rounds = nullptr;
-        std::map<uint32_t, TESForm*> g_harmless;  // weapon id -> our harmless copy of it
+        std::map<uint32_t, TESForm*> g_harmless;
         constexpr size_t kMaxHarmless = 256;
-        // Projectile id -> our harmless copy (its explosion harmless too); explosion id -> ours (step 8.8).
         std::map<uint32_t, BGSProjectile*> g_harmlessProjectiles;
         std::map<uint32_t, BGSExplosion*> g_harmlessExplosions;
-        std::map<uint32_t, BGSExplosion*> g_quietExplosions;  // explosion id -> harmless, unseen and unheard too
-        // Our own attacks: what we held, and its rounds and our action last frame.
+        std::map<uint32_t, BGSExplosion*> g_quietExplosions;
         uint32_t g_myWeapon = 0;
         int g_myRounds = -1;
         int g_myAction = -1;
-        coop::ShotCounter g_myShots;  // our player's gun shots (as for the host's NPCs, step 5)
-        std::vector<uint32_t> g_standInBases;  // our copies of the Traveler (newest last)
+        coop::ShotCounter g_myShots;
+        std::vector<uint32_t> g_standInBases;
         constexpr size_t kMaxStandInBases = 32;
         Script* g_turn = nullptr;
         Script* g_equipped = nullptr;
@@ -76,7 +77,7 @@ namespace game
         Script* g_evaluate = nullptr;
         Script* g_combatOff = nullptr;
 
-        constexpr int kEquipSlots = 20;  // body slots 0-19 (5 is the weapon)
+        constexpr int kEquipSlots = 20;
         Script* g_notify = nullptr;
         Script* g_notifyFor = nullptr;
         Script* g_moveBy = nullptr;
@@ -87,7 +88,6 @@ namespace game
         Script* g_makeCompanion = nullptr;
         Script* g_stopFighting = nullptr;
         Script* g_kill = nullptr;
-        // The host's NPCs on friends' games (step 5.3); without them, NPCs just don't show shots or idles.
         Script* g_playedIdle = nullptr;
         Script* g_combatTarget = nullptr;
         Script* g_forceTarget = nullptr;
@@ -105,8 +105,6 @@ namespace game
         Script* g_unequip = nullptr;
         Script* g_idleGroup = nullptr;
         Script* g_forceStopIdle = nullptr;
-        // Characters we made (friends', copies of the host's NPCs), listed in a JIP auxiliary variable on the
-        // player, which JIP keeps in saves (xNVSE doesn't keep our own save data: we have no opcode range yet).
         Script* g_madeClear = nullptr;
         Script* g_madeAdd = nullptr;
         Script* g_madeCount = nullptr;
@@ -116,20 +114,20 @@ namespace game
         Script* g_controls = nullptr;
         Script* g_controlPressed = nullptr;
         Script* g_menuMode = nullptr;
-        Script* g_keyPressed = nullptr;   // text chat: is this key down (outside menus)
-        Script* g_chatHud = nullptr;      // text chat: our line on the HUD, made
-        Script* g_chatShow = nullptr;     // text chat: its text and whether it shows
-        Script* g_onScreen = nullptr;     // text chat: where above a character is on screen (Johnny Guitar)
-        constexpr int kChatAboveSlots = 5;  // players with a line floating above them at once
-        Script* g_chatAbove[kChatAboveSlots] = {};  // text chat: one floating line's text, place, showing
-        constexpr int kMarkSlots = 4;     // friends' markers (Alex, 2026-10-19: a chevron and their name over them)
+        Script* g_keyPressed = nullptr;
+        Script* g_chatHud = nullptr;
+        Script* g_chatShow = nullptr;
+        Script* g_onScreen = nullptr;
+        constexpr int kChatAboveSlots = 5;
+        Script* g_chatAbove[kChatAboveSlots] = {};
+        constexpr int kMarkSlots = 4;
         Script* g_mark[kMarkSlots] = {};
-        Script* g_questStage = nullptr;   // quick start: a quest's stage (-1: not running)
-        Script* g_tutorialTimer = nullptr;  // quick start: the tutorial held or let go on
-        Script* g_leaveTutorial = nullptr;  // quick start: what Doc's farewell does
-        Script* g_activateBy = nullptr;   // quick start: a reference activated by the player (a door, an activator)
-        Script* g_starterGear = nullptr;  // quick start: Doc's starting gear, by tag skills
-        Script* g_effectTrait = nullptr;  // co-op balanced: an item's effect's magnitude or duration (JIP)
+        Script* g_questStage = nullptr;
+        Script* g_tutorialTimer = nullptr;
+        Script* g_leaveTutorial = nullptr;
+        Script* g_activateBy = nullptr;
+        Script* g_starterGear = nullptr;
+        Script* g_effectTrait = nullptr;
         Script* g_loadedOfType = nullptr;
         Script* g_showMap = nullptr;
         Script* g_questObject = nullptr;
@@ -139,28 +137,24 @@ namespace game
         Script* g_speedMult = nullptr;
         Script* g_actorAlpha = nullptr;
         Script* g_collision = nullptr;
-        TESForm* g_teleporter = nullptr;  // the teleporter item (made once a session)
+        TESForm* g_teleporter = nullptr;
         Script* g_armorDR = nullptr;
-        Script* g_bodyPartLists = nullptr;  // co-op balanced: every body part list (BGSBodyPartData) loaded
-        Script* g_bodyPartMult = nullptr;   // co-op balanced: a body part's damage times (JIP)
-        Script* g_keyDisabled = nullptr;  // xNVSE IsKeyDisabled
-        Script* g_disableKey = nullptr;   // xNVSE DisableKey / EnableKey
+        Script* g_itemValue = nullptr;
+        Script* g_bodyPartLists = nullptr;
+        Script* g_bodyPartMult = nullptr;
+        Script* g_keyDisabled = nullptr;
+        Script* g_disableKey = nullptr;
         Script* g_loadingScreen = nullptr;
-        // Developer tools (the inspector and console commands): not needed for co-op.
         Script* g_aiState = nullptr;
         Script* g_print = nullptr;
-        // Doors (step 6.1).
         Script* g_openState = nullptr;
         Script* g_setOpen = nullptr;
         Script* g_lock = nullptr;
-        // Containers (step 6.2).
         Script* g_contents = nullptr;
         Script* g_addItem = nullptr;
         Script* g_activate = nullptr;
         Script* g_refreshItems = nullptr;
         Script* g_loadOrder = nullptr;
-        // Quests the game's way (step 7.1: the player's own objective list, which the Pip-Boy, the map markers and
-        // the corner messages use, only changes through these; quest lab, 2026-10-15).
         Script* g_objectiveShown = nullptr;
         Script* g_objectiveDone = nullptr;
         Script* g_completeQuest = nullptr;
@@ -172,7 +166,7 @@ namespace game
         Script* g_karma = nullptr;
         Script* g_giveXp = nullptr;
         Script* g_giveKarma = nullptr;
-        std::vector<EnableChange> g_enables;  // not taken yet
+        std::vector<EnableChange> g_enables;
         constexpr size_t kMaxPendingEnables = 1024;
 
         void RecordEnable(void* parameters, bool enabled)
@@ -185,17 +179,16 @@ namespace game
 
         void OnEnable(TESObjectREFR*, void* parameters) { RecordEnable(parameters, true); }
         void OnDisable(TESObjectREFR*, void* parameters) { RecordEnable(parameters, false); }
-        // Items lying in the world (step 6.3).
         Script* g_placeItem = nullptr;
         Script* g_moveItem = nullptr;
-        Script* g_grabbed = nullptr;  // (step 8.9: what our player carries)
-        Script* g_followers = nullptr;  // (companions)
+        Script* g_grabbed = nullptr;
+        Script* g_followers = nullptr;
         Script* g_isTeammate = nullptr;
         Script* g_crosshair = nullptr;
         Script* g_limbsGone = nullptr;
         NVSECommandTableInterface* g_cmdTable = nullptr;
         Script* g_pcAddItem = nullptr;
-        Script* g_changeKind = nullptr;  // one kind of item (condition, weapon mods) added or taken
+        Script* g_changeKind = nullptr;
         Script* g_pcRemoveItem = nullptr;
         Script* g_pcRemoveAll = nullptr;
         Script* g_pcRemoveAllTyped = nullptr;
@@ -204,6 +197,7 @@ namespace game
         Script* g_pcUnequip = nullptr;
         Script* g_pcAddPerk = nullptr;
         Script* g_pcRemovePerk = nullptr;
+        Script* g_perkRanks = nullptr;
         Script* g_pcAddNote = nullptr;
         Script* g_pcRemoveNote = nullptr;
         Script* g_pcAddImod = nullptr;
@@ -222,19 +216,17 @@ namespace game
         Script* g_currentPackage = nullptr;
         Script* g_inCombat = nullptr;
         Script* g_wheelOpen = nullptr;
-        Script* g_isMobile = nullptr;  // (step 8.9: can physics move it)
+        Script* g_isMobile = nullptr;
         Script* g_disable = nullptr;
 
-        // Hits not yet taken, with the health they had. The hit event comes before the damage (seen in game),
-        // so the health lost by the next frame is the hit, all shotgun pellets included.
         struct PendingHit { uint32_t refId; uint32_t attackerId; float healthAtHit; };
         std::vector<PendingHit> g_myHits;
         constexpr size_t kMaxPendingHits = 64;
 
         constexpr float kRadToDeg = 57.2957795f;
-        constexpr int kPuppetAmmo = 500;  // rounds given with a puppet's gun (it never really uses them up)
+        constexpr int kPuppetAmmo = 500;
 
-        std::set<const Script*> g_ourScripts;  // (scripted sequences: never mirrored)
+        std::set<const Script*> g_ourScripts;
 
         Script* Compile(const char* what, const std::string& text)
         {
@@ -244,6 +236,16 @@ namespace game
             else
                 g_ourScripts.insert(s);
             return s;
+        }
+
+        std::array<Script*, coop::kAttackVersions> CompileVersions(const char* what, const char* group)
+        {
+            const char* const kSuffixes[coop::kAttackVersions] = {"", "Up", "Down"};
+            std::array<Script*, coop::kAttackVersions> scripts{};
+            for (int i = 0; i < coop::kAttackVersions; ++i)
+                scripts[i] = Compile(what, std::string("Begin Function {}\n  PlayGroupAlt ") + group + kSuffixes[i] +
+                    " 1\nEnd\n");
+            return scripts;
         }
 
         uint32_t FloatArg(float f) { return *reinterpret_cast<uint32_t*>(&f); }
@@ -256,8 +258,6 @@ namespace game
             return static_cast<float>(result.GetNumber());
         }
 
-        // xNVSE's OnHit event, for every hit in the world: arguments are who was hit and who hit them.
-        // Kept: our player's hits, and hits on stand-ins (their base form; few real NPCs share it).
         void OnHit(TESObjectREFR*, void* parameters)
         {
             auto** args = static_cast<void**>(parameters);
@@ -267,7 +267,6 @@ namespace game
                 return;
             if (victim == Player())
             {
-                // Kept too: hits on our player by another character (a friend's game undoes them, step 5.3).
                 if (!attacker || attacker == Player() || !IsActor(static_cast<TESObjectREFR*>(attacker)))
                     return;
             }
@@ -280,9 +279,9 @@ namespace game
             }
             for (const PendingHit& p : g_myHits)
                 if (p.refId == victim->refID)
-                    return;  // already counting this frame's damage to them
+                    return;
             float health = Health(victim);
-            if (health > 0)  // not already dead
+            if (health > 0)
                 g_myHits.push_back({victim->refID, attacker ? attacker->refID : 0, health});
         }
     }
@@ -324,7 +323,6 @@ namespace game
             return g_compiled;
 
         using namespace ids;
-        // Forms are passed in as arguments (see ids in addresses.h).
         g_spawn = Compile("place",
             "ref rBase\n"
             "ref rNew\n"
@@ -332,46 +330,26 @@ namespace game
             "  set rNew to PlaceAtMe rBase 1\n"
             "  SetFunctionValue rNew\n"
             "End\n");
-        g_clone = Compile("copy form",  // a copy that isn't kept in saves
+        g_clone = Compile("copy form",
             "ref rBase\n"
             "ref rCopy\n"
             "Begin Function {rBase}\n"
             "  set rCopy to TempCloneForm rBase\n"
             "  SetFunctionValue rCopy\n"
             "End\n");
-        // On a stand-in's base: activating them runs this instead of starting a conversation.
         g_noTalk = Compile("no talking",
             "Begin OnActivate\n"
             "  return\n"
             "End\n");
         if (g_noTalk)
             g_noTalk->info.type = Script::eType_Object;
-        // Attacks (not needed for the rest: without them, friends just don't show their shots).
         g_fire = Compile("fire weapon",
             "ref rWeapon\n"
             "Begin Function {rWeapon}\n"
             "  FireWeapon rWeapon\n"
             "End\n");
-        // kNVSE's PlayGroupAlt, not the game's PlayGroup: on an actor, PlayGroup also puts it in
-        // the "script animation" action (Ghidra, 0x005C0DF0), which stops its legs and holstering until a script
-        // plays Idle (seen in the puppet lab). With its up and down versions, which the game tilts by where the actor
-        // looks (step 8.7: with the level one alone, a copy looking up shot level; the lab log showed only it playing).
-        // Throws and mines (step 8.8): their own attack groups (in the game's list: AttackThrow, PlaceMine and their
-        // Up and Down versions), tilted by where the actor looks as above.
-        g_throwAnim = Compile("throw animation",
-            "Begin Function {}\n"
-            "  PlayGroupAlt AttackThrow 1\n"
-            "  PlayGroupAlt AttackThrowUp 1\n"
-            "  PlayGroupAlt AttackThrowDown 1\n"
-            "End\n");
-        g_mineAnim = Compile("mine animation",
-            "Begin Function {}\n"
-            "  PlayGroupAlt PlaceMine 1\n"
-            "  PlayGroupAlt PlaceMineUp 1\n"
-            "  PlayGroupAlt PlaceMineDown 1\n"
-            "End\n");
-        // Something at a spot (JIP's PlaceAtCell: a form placed at x, y, z in a cell or worldspace; an explosion goes
-        // off there).
+        g_throwAnim = CompileVersions("throw animation", "AttackThrow");
+        g_mineAnim = CompileVersions("mine animation", "PlaceMine");
         g_placeAt = Compile("place at",
             "ref rForm\n"
             "ref rWhere\n"
@@ -381,12 +359,7 @@ namespace game
             "Begin Function {rForm, rWhere, fX, fY, fZ}\n"
             "  PlaceAtCell rForm 1 rWhere fX fY fZ\n"
             "End\n");
-        g_attackAnim = Compile("attack animation",
-            "Begin Function {}\n"
-            "  PlayGroupAlt AttackRight 1\n"
-            "  PlayGroupAlt AttackRightUp 1\n"
-            "  PlayGroupAlt AttackRightDown 1\n"
-            "End\n");
+        g_attackAnim = CompileVersions("attack animation", "AttackRight");
         g_rounds = Compile("rounds",
             "int iRounds\n"
             "Begin Function {}\n"
@@ -396,7 +369,7 @@ namespace game
         g_npcRounds = Compile("NPC rounds",
             "int iRounds\n"
             "Begin Function {}\n"
-            "  set iRounds to GetCurrentAmmoRounds\n"  // JIP: rounds in its gun's magazine, for any character
+            "  set iRounds to GetCurrentAmmoRounds\n"
             "  SetFunctionValue iRounds\n"
             "End\n");
         g_turn = Compile("turn",
@@ -440,7 +413,7 @@ namespace game
             "  if IsSneaking\n"
             "    set iFlags to iFlags + 2\n"
             "  endif\n"
-            "  set iFlags to iFlags + GetSitting * 4\n"  // (read by Stance)
+            "  set iFlags to iFlags + GetSitting * 4\n"
             "  SetFunctionValue iFlags\n"
             "End\n");
         g_equipped = Compile("equipped item",
@@ -479,9 +452,9 @@ namespace game
         g_combatOff = Compile("combat off",
             "int iOff\n"
             "Begin Function {iOff}\n"
-            "  SetCombatDisabled iOff\n"  // JIP: it never starts fighting
+            "  SetCombatDisabled iOff\n"
             "  if iOff\n"
-            "    SetTeammateUsingAmmo 0\n"  // JIP: infinite ammo (it never reloads by itself)
+            "    SetTeammateUsingAmmo 0\n"
             "  else\n"
             "    SetTeammateUsingAmmo 1\n"
             "  endif\n"
@@ -496,7 +469,7 @@ namespace game
         g_unequip = Compile("unequip item",
             "ref rItem\n"
             "Begin Function {rItem}\n"
-            "  UnequipItem rItem 0 1\n"  // 1: no message
+            "  UnequipItem rItem 0 1\n"
             "End\n");
         g_removeItem = Compile("remove item",
             "ref rItem\n"
@@ -519,7 +492,7 @@ namespace game
             "Begin Function {sText, fSeconds}\n"
             "  MessageExAlt fSeconds \"%z\" sText\n"
             "End\n");
-        g_moveBy = Compile("move by",  // MoveTo yourself, offset: a proper move (tried in the console, Oct 2026)
+        g_moveBy = Compile("move by",
             "float fX\n"
             "float fY\n"
             "float fZ\n"
@@ -558,10 +531,8 @@ namespace game
             "  SetIgnoreFriendlyHits 1\n"
             "  SetActorValue Aggression 0\n"
             "  SetActorValue Assistance 0\n"
-            // Foolhardy: never flees or cowers (3-player session, 2026-10-27: puppets went into the game's cower
-            // idle, CowerIdles, with enemies near: the Traveler they're copied from is Cautious, 1).
             "  SetActorValue Confidence 4\n"
-            "  SetCombatDisabled 1\n"  // JIP: it never starts fighting (a puppet attacks only when its player does)
+            "  SetCombatDisabled 1\n"
             "  if rFaction\n"
             "    AddToFaction rFaction 0\n"
             "  endif\n"
@@ -572,9 +543,6 @@ namespace game
             "    StopCombat\n"
             "  endif\n"
             "End\n");
-        // Killed as on the host: not essential here either (Dead Money's Ghost People make themselves essential, so a
-        // plain Kill only knocked a friend's copy down and it got up again), and that limb cut off (-1: none). The
-        // same on a body cuts off another (vaultmp kills with Kill <itself> <limb> <cause>, once per limb gone).
         g_kill = Compile("kill",
             "int iLimb\n"
             "ref rSelf\n"
@@ -633,8 +601,6 @@ namespace game
             "  endif\n"
             "  SetFunctionValue iPressed\n"
             "End\n");
-        // Text chat's line on the HUD (JIP's InjectUIComponent, the XML given; JIP's SetUIStringEx, xNVSE's
-        // SetUIFloat), and the game kept from the keys while typing (xNVSE's DisableKey).
         g_chatHud = Compile("chat hud",
             "string_var sXml\n"
             "Begin Function {sXml}\n"
@@ -647,10 +613,6 @@ namespace game
             "  SetUIStringEx \"HUDMainMenu/NVCoopChat/NVCoopChatText/string\" \"%z\" sText\n"
             "  SetUIFloat \"HUDMainMenu/NVCoopChat/visible\" iShow\n"
             "End\n");
-        // A line above a character: Johnny Guitar's WorldToScreen gives where a point above them is on screen (0 to 1
-        // across and down; 0 if it's off screen or behind), and the line's HUD text (made in ShowChatLine) goes
-        // there: its x and y are the screen's size times its user0 and user1.
-        // (Newer Johnny Guitars take the variables, older ones their names, and the newer have the older's too.)
         for (const char* call : {"WorldToScreen fX fY fZ 0 0 150 2 rWho", "JGLegacyWorldToScreen \"fX\" \"fY\" \"fZ\" 0 0 150 2 rWho",
                  "WorldToScreen \"fX\" \"fY\" \"fZ\" 0 0 150 2 rWho"})
         {
@@ -723,8 +685,6 @@ namespace game
                 "  SetUIFloat \"" + path + "/visible\" iShow\n"
                 "End\n");
         }
-        // Quick start (forms passed in: ids in addresses.h). The tutorial's timer (its quest script's bRunTimer:
-        // what moves it on to Doc talking) held while we ask.
         g_tutorialTimer = Compile("tutorial timer",
             "int iRun\n"
             "Begin Function {iRun}\n"
@@ -813,9 +773,6 @@ namespace game
             "    player.AddItem rGloves 1\n"
             "  endif\n"
             "End\n");
-        // Co-op balanced: an item's nth effect's magnitude (trait 0) or duration (trait 2), read (iValue < 0) or set
-        // (JIP's GetNthEffectTraitNumeric / SetNthEffectTraitNumeric; read in game 2026-10-17: a Stimpak heals 5 a
-        // second for 6).
         g_effectTrait = Compile("effect trait",
             "ref rItem\n"
             "int iEffect\n"
@@ -829,10 +786,6 @@ namespace game
             "  endif\n"
             "  SetFunctionValue iWas\n"
             "End\n");
-        // Co-op balanced: body parts' damage (xNVSE's GetLoadedTypeArray, form type 0x57 BGSBodyPartData; JIP's
-        // Get/SetBodyPartTraitNumeric, trait 1 the damage times; read (fValue < 0) or set).
-        // Every loaded form of a type (co-op balanced: armor, loot lists), and an armor's DR as xNVSE reads it (to
-        // check our read).
         g_loadedOfType = Compile("loaded of type",
             "int iType\n"
             "array_var aForms\n"
@@ -840,13 +793,11 @@ namespace game
             "  let aForms := GetLoadedTypeArray iType\n"
             "  SetFunctionValue aForms\n"
             "End\n");
-        // Fast travel there unlocked (the game's ShowMap with travel on: as finding it does, minus the XP).
         g_showMap = Compile("show map",
             "ref rMarker\n"
             "Begin Function {rMarker}\n"
             "  ShowMap rMarker 1\n"
             "End\n");
-        // The teleporter item can't be dropped, sold or put away (the game's quest item flag on its base).
         g_questObject = Compile("quest object",
             "ref rItem\n"
             "Begin Function {rItem}\n"
@@ -859,27 +810,21 @@ namespace game
             "  set iCount to GetItemCount rItem\n"
             "  SetFunctionValue iCount\n"
             "End\n");
-        // A friend's character's collision on or off (JIP ToggleObjectCollision: off, a character sinks into a chair as
-        // one sitting does).
         g_collision = Compile("collision",
             "int iOn\n"
             "Begin Function {iOn}\n"
             "  ToggleObjectCollision iOn\n"
             "End\n");
-        // An actor's speed (JIP's SetSpeedMult: the SpeedMult actor value, and the game's cached speed recomputed, so
-        // it takes at once; the game plays its walk and run faster or slower to match).
         g_speedMult = Compile("speed mult",
             "int iMult\n"
             "Begin Function {iMult}\n"
             "  SetSpeedMult iMult\n"
             "End\n");
-        // A friend's character see-through or not (the game's SetActorAlpha: 0 unseen, 1 as normal).
         g_actorAlpha = Compile("actor alpha",
             "float fAlpha\n"
             "Begin Function {fAlpha}\n"
             "  SetActorAlpha fAlpha\n"
             "End\n");
-        // The revive bar's text (JIP's SetUIStringEx; xNVSE's SetUIFloat), a HUD text made in MakeChatHud.
         g_reviveBar = Compile("revive bar",
             "string_var sText\n"
             "int iShow\n"
@@ -889,7 +834,6 @@ namespace game
             "  endif\n"
             "  SetUIFloat \"HUDMainMenu/NVCoopRevive/visible\" iShow\n"
             "End\n");
-        // Lab: an actor sits in (uses) the nearest furniture (xNVSE GetRefs 39: furniture, this cell and the next).
         g_sitNearest = Compile("sit nearest",
             "ref rActor\n"
             "ref rChair\n"
@@ -921,6 +865,13 @@ namespace game
             "Begin Function {rArmor}\n"
             "  set iDR to GetArmorAR rArmor\n"
             "  SetFunctionValue iDR\n"
+            "End\n");
+        g_itemValue = Compile("item value",
+            "ref rItem\n"
+            "int iValue\n"
+            "Begin Function {rItem}\n"
+            "  set iValue to GetValue rItem\n"
+            "  SetFunctionValue iValue\n"
             "End\n");
         g_bodyPartLists = Compile("body part lists",
             "array_var aLists\n"
@@ -974,12 +925,6 @@ namespace game
             "    rTarget.StartCombat rBy\n"
             "  endif\n"
             "End\n");
-        // Who it goes for. StartCombat does nothing while it's fighting someone else, so its fight is stopped and
-        // started again on the new one (lab 2026-10-19: Powder Gangers turned on a friend's character and kept hitting
-        // it); JIP's SetCombatDisabled 1 <target> then holds it there (only while it's fighting them); 0 lets go.
-        // Co-op balanced's extra enemy: a new one of the same kind, behind `this` (PlaceAtMe finds a spot 600 units
-        // back), going for the same player. (MarkForDelete deleted it at once: lab 2026-10-19; main.cpp clears extras
-        // away.)
         g_placeExtra = Compile("place extra enemy",
             "ref rBase\n"
             "ref rTarget\n"
@@ -991,8 +936,6 @@ namespace game
             "  endif\n"
             "  SetFunctionValue rNew\n"
             "End\n");
-        // Co-op balanced: a body keeps iKept % of each kind of ammo it has (xNVSE's GetNumItems, GetInventoryObject;
-        // object type 41 is ammo).
         g_thinAmmo = Compile("thin ammo",
             "int iKept\n"
             "int iN\n"
@@ -1018,8 +961,6 @@ namespace game
             "  loop\n"
             "  SetFunctionValue iTotal\n"
             "End\n");
-        // The player's field of view: 0 the world's, 1 the hands' and weapon's (Johnny Guitar's GetPlayerCamFOV;
-        // its own names have them the other way round: lab 2026-10-19, 75 and 55 as the INI's).
         g_fovNow = Compile("field of view",
             "int iWhich\n"
             "float fFov\n"
@@ -1052,7 +993,6 @@ namespace game
             "  endif\n"
             "End\n");
 
-        // Developer tools. One number for the inspector (dev::UnpackAi reads it back).
         g_aiState = Compile("AI state",
             "int iBits\n"
             "Begin Function {}\n"
@@ -1070,13 +1010,13 @@ namespace game
         g_playedIdle = Compile("played idle",
             "ref rIdle\n"
             "Begin Function {}\n"
-            "  set rIdle to GetPlayedIdle\n"  // JIP
+            "  set rIdle to GetPlayedIdle\n"
             "  SetFunctionValue rIdle\n"
             "End\n");
         g_playIdle = Compile("play idle",
             "ref rIdle\n"
             "Begin Function {rIdle}\n"
-            "  PlayIdleEx rIdle\n"  // JIP
+            "  PlayIdleEx rIdle\n"
             "End\n");
         g_setMaxHealth = Compile("set max health",
             "float fHealth\n"
@@ -1085,25 +1025,24 @@ namespace game
             "End\n");
         g_stopIdle = Compile("stop idle",
             "Begin Function {}\n"
-            "  StopIdle\n"  // JIP
+            "  StopIdle\n"
             "End\n");
-        // Ways out of a leftover animation (sitting, after being moved out of a chair: step 5.3 test).
         g_idleGroup = Compile("idle group",
             "Begin Function {}\n"
-            "  PlayGroupAlt Idle 1\n"  // kNVSE (the game's PlayGroup also freezes its legs)
+            "  PlayGroupAlt Idle 1\n"
             "End\n");
         g_forceStopIdle = Compile("force stop idle",
             "Begin Function {}\n"
-            "  ForceStopIdle\n"  // kNVSE
+            "  ForceStopIdle\n"
             "End\n");
         g_madeClear = Compile("forget made characters",
             "Begin Function {}\n"
-            "  AuxVarErase \"_NVCoopMade\"\n"  // JIP ('_': not tied to a mod)
+            "  AuxVarErase \"_NVCoopMade\"\n"
             "End\n");
         g_madeAdd = Compile("note a made character",
             "ref rMade\n"
             "Begin Function {rMade}\n"
-            "  AuxVarSetRef \"_NVCoopMade\" rMade -1\n"  // -1: add at the end
+            "  AuxVarSetRef \"_NVCoopMade\" rMade -1\n"
             "End\n");
         g_madeCount = Compile("count made characters",
             "int iCount\n"
@@ -1120,7 +1059,7 @@ namespace game
             "End\n");
         g_resurrect = Compile("resurrect",
             "Begin Function {}\n"
-            "  ResurrectActor 1\n"  // 1: it gets up
+            "  ResurrectActor 1\n"
             "End\n");
 
         g_print = Compile("console print",
@@ -1140,10 +1079,6 @@ namespace game
             "Begin Function {iOpen}\n"
             "  SetOpenState iOpen\n"
             "End\n");
-        // Energy weapons' kills (Alex, 2026-10-19 session): which pile a body is turning into (the spells' magic
-        // effects, data detective: GooificationEffect and its shader one, LaserDisintegrationEffect,
-        // AlienDisintegrationEffect; 0 none), and that pile made on a body (the same spells the game casts:
-        // PlasmaEffect, LaserDisintegrationFXSpell, AlienDisintegrationFXSpell).
         g_pileKind = Compile("pile kind",
             "int iKind\n"
             "Begin Function {}\n"
@@ -1184,10 +1119,6 @@ namespace game
             "  endif\n"
             "End\n");
 
-        // [item, count, item, count, ...]: everything it has, as the game counts it (levelled lists resolved).
-        // What it holds, four numbers a stack: the item, how many, its condition (percent; 255: it has none) and its
-        // weapon mods. Items with condition are read stack by stack (xNVSE inventory references: a stack with its own
-        // condition or mods is its own; GetHealth, the base form's full condition; JIP GetWeaponRefModFlags).
         g_contents = Compile("contents",
             "array_var aItems\n"
             "array_var aRefs\n"
@@ -1235,9 +1166,6 @@ namespace game
             "  loop\n"
             "  SetFunctionValue aItems\n"
             "End\n");
-        // One kind added (at its condition, with its mods: one at a time when it has mods, each new stack then given
-        // them) or taken out of the stacks of that kind (JIP's RemoveMeIRAlt: the game's own RemoveItem on that stack,
-        // right away; xNVSE's RemoveMeIR crashed the game with the box open, lab 2026-10-17).
         g_changeKind = Compile("change item kind",
             "ref rItem\n"
             "int iCount\n"
@@ -1316,7 +1244,6 @@ namespace game
             "  RefreshItemsList\n"
             "End\n");
 
-        // PlaceAtMe with a count makes that many items, not one stack: one, then its count (xNVSE SetRefCount).
         g_placeItem = Compile("place item",
             "ref rBase\n"
             "int iCount\n"
@@ -1334,7 +1261,6 @@ namespace game
             "  rNew.SetPos z fZ\n"
             "  SetFunctionValue rNew\n"
             "End\n");
-        // (JIP's SetPosEx and SetAngleEx, in degrees: all at once, its physics reset there.)
         g_moveItem = Compile("move item",
             "float fX\n"
             "float fY\n"
@@ -1346,8 +1272,6 @@ namespace game
             "  SetPosEx fX fY fZ\n"
             "  SetAngleEx fRX fRY fRZ\n"
             "End\n");
-        // Our teammates but those told to wait (the game's companions all keep it in their script's Waiting; the
-        // game's own follower list, JIP's GetFollowers, stayed empty for a companion following us: lab 2026-10-16).
         g_followers = Compile("followers",
             "array_var aTeam\n"
             "array_var aOut\n"
@@ -1371,7 +1295,7 @@ namespace game
             "End\n");
         g_crosshair = Compile("crosshair ref",
             "Begin Function {}\n"
-            "  SetFunctionValue GetCrosshairRef\n"  // (as the lab's eval does: "set rAt to" it didn't compile)
+            "  SetFunctionValue GetCrosshairRef\n"
             "End\n");
         g_isTeammate = Compile("is teammate",
             "Begin Function {}\n"
@@ -1496,6 +1420,13 @@ namespace game
             "ref rPerk\n"
             "Begin Function {rPerk}\n"
             "  RemovePerk rPerk\n"
+            "End\n");
+        g_perkRanks = Compile("perk ranks",
+            "ref rPerk\n"
+            "int iRanks\n"
+            "Begin Function {rPerk}\n"
+            "  let iRanks := (HasPerkRank rPerk 0) + 256 * (HasPerkRank rPerk 1)\n"
+            "  SetFunctionValue iRanks\n"
             "End\n");
         g_pcAddNote = Compile("pc add note",
             "ref rNote\n"
@@ -1728,23 +1659,30 @@ namespace game
             if (item && (!armourOnly || item->IsArmor()))
                 items.push_back(item->refID);
         }
-        return items;  // armour covering several slots shows up more than once; coop removes duplicates
+        return items;
     }
 
     bool Wear(TESObjectREFR* ref, uint32_t formId)
     {
-        TESForm* item = LookupForm(formId);  // the id came from another PC: check it before use
+        TESForm* item = LookupForm(formId);
         return item && item->IsArmor() && AddAndEquip(ref, formId);
+    }
+
+    bool InDocMitchellsHouse()
+    {
+        TESObjectREFR* player = Player();
+        return player && player->parentCell && player->parentCell->refID == ids::kDocMitchellHouse;
     }
 
     bool IsPastIntro()
     {
         TESObjectREFR* player = Player();
-        TESForm* quest = LookupForm(ids::kIntroQuest);
-        if (!player || !player->parentCell || !quest || quest->typeID != kFormType_TESQuest)
+        if (!player || !player->parentCell || QuestStage(ids::kBennyIntroQuest) >= 0)
             return false;
-        bool questDone = (static_cast<TESQuest*>(quest)->flags & layout::kQuestCompleted) != 0;
-        return questDone && player->parentCell->refID != ids::kDocMitchellHouse;
+        TESForm* quest = LookupForm(ids::kIntroQuest);
+        bool tutorialDone = quest && quest->typeID == kFormType_TESQuest &&
+            (static_cast<TESQuest*>(quest)->flags & layout::kQuestCompleted) != 0;
+        return tutorialDone || !InDocMitchellsHouse();
     }
 
     namespace
@@ -1763,7 +1701,7 @@ namespace game
 
     TESObjectREFR* PlaceActor(uint32_t baseId)
     {
-        TESForm* base = LookupForm(baseId);  // (the id may come from another PC: check it before use)
+        TESForm* base = LookupForm(baseId);
         if (!base || (base->typeID != kFormType_TESNPC && base->typeID != kFormType_TESCreature &&
             base->typeID != kFormType_TESLevCreature && base->typeID != kFormType_TESLevCharacter))
             return nullptr;
@@ -1772,7 +1710,6 @@ namespace game
 
     namespace
     {
-        // Names come from other players: at most 63 characters, no control characters.
         void SetName(String& s, const char* name)
         {
             size_t len = 0;
@@ -1785,20 +1722,18 @@ namespace game
             for (size_t i = 0; i < len; ++i)
                 text[i] = static_cast<unsigned char>(name[i]) < 0x20 ? '?' : name[i];
             text[len] = 0;
-            s.m_data = text;  // the old text may be shared with the original, so it's left alone
+            s.m_data = text;
             s.m_dataLen = s.m_bufLen = static_cast<UInt16>(len);
         }
     }
 
     namespace
     {
-        bool LooksOntoBase(TESForm* base, const net::PlayerLooks& looks, int& shared);  // (below, with ApplyLooks)
+        bool LooksOntoBase(TESForm* base, const net::PlayerLooks& looks, int& shared);
     }
 
     TESObjectREFR* SpawnStandIn(const char* name, const net::PlayerLooks* looks)
     {
-        // Our own copy of the Traveler (not kept in saves): essential only for this friend, their name, and
-        // the no-talking script.
         TESForm* original = LookupForm(ids::kStandInBase);
         if (!g_compiled || !Player() || !name || !original || original->typeID != kFormType_TESNPC)
             return nullptr;
@@ -1810,8 +1745,6 @@ namespace game
             return nullptr;
         auto* base = static_cast<TESActorBase*>(copy);
         SetName(base->fullName.name, name);
-        // No items: emptying a live character's inventory races with the game loading its body. (The copy's
-        // first list entry is its own; the rest is shared with the original, so only the start is cut.)
         base->container.formCountList.m_listHead.data = nullptr;
         base->container.formCountList.m_listHead.next = nullptr;
         if (g_noTalk)
@@ -1822,7 +1755,6 @@ namespace game
             g_standInBases.erase(g_standInBases.begin());
         g_standInBases.push_back(copy->refID);
         LOG_DEBUG("Character type %08X for %s", copy->refID, name);
-        // Their looks before it's made, so its body and head are theirs from the start.
         int shared = 0;
         if (looks && LooksOntoBase(copy, *looks, shared))
             LOG_INFO("Looks: %s's character made looking like them (%s)", name, looks->female ? "female" : "male");
@@ -1854,7 +1786,7 @@ namespace game
 
     bool TravelTo(const coop::Pose& pose)
     {
-        TESForm* place = LookupForm(pose.space);  // from the network: check it really is a place
+        TESForm* place = LookupForm(pose.space);
         if (!g_compiled || !Player() || !place ||
             (place->typeID != kFormType_TESObjectCELL && place->typeID != kFormType_TESWorldSpace))
             return false;
@@ -1876,16 +1808,13 @@ namespace game
 
     namespace
     {
-        // The game tilts weapon animations by where an actor looks each frame (BaseProcess function 0x9295C0, Ghidra):
-        // it weighs the three in MiddleHighProcess +0x1C4 (level, up, down; xNVSE GameProcess.h) by its pitch. What
-        // plays in the weapon slots: AnimData +0xE0 animSequence[8] (xNVSE), [4] weapon, [5] up, [6] down.
         constexpr uintptr_t kAimSlots = 0x1C4;
         constexpr uintptr_t kAnimSequences = 0xE0;
 
         void** AimSlots(TESObjectREFR* ref)
         {
             BaseProcess* process = IsActor(ref) ? static_cast<Actor*>(ref)->baseProcess : nullptr;
-            if (!process || process->processLevel > 1)  // high or middle-high process only
+            if (!process || process->processLevel > 1)
                 return nullptr;
             return reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(process) + kAimSlots);
         }
@@ -1893,7 +1822,7 @@ namespace game
         const char* SequenceName(const void* sequence)
         {
             const char* path = sequence ? *reinterpret_cast<const char* const*>(
-                reinterpret_cast<const uint8_t*>(sequence) + 0x08) : nullptr;  // NiControllerSequence +0x08 its file
+                reinterpret_cast<const uint8_t*>(sequence) + 0x08) : nullptr;
             return path ? path : "-";
         }
     }
@@ -1903,8 +1832,6 @@ namespace game
         if (!IsActor(ref) || !std::isfinite(pitch))
             return;
         ref->rotX = pitch;
-        // The game tilts the three noted in its aim slots, which only its own attacks and aiming update: a copy's
-        // attack (PlayAttack) would play untilted, so they follow what plays now (when all three play).
         void** slots = AimSlots(ref);
         AnimData* anim = slots ? ref->GetAnimData() : nullptr;
         if (!anim)
@@ -1925,9 +1852,14 @@ namespace game
             return;
         }
         void** playing = reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(anim) + kAnimSequences);
-        LOG_INFO("Aim slots: tilted %s | %s | %s; playing %s | %s | %s; pitch %.2f", SequenceName(slots[0]),
-            SequenceName(slots[1]), SequenceName(slots[2]), SequenceName(playing[4]), SequenceName(playing[5]),
-            SequenceName(playing[6]), ref->rotX);
+        auto group = [anim](int layer) {
+            return *reinterpret_cast<const uint16_t*>(reinterpret_cast<const uint8_t*>(anim) + process::kAnimGroupIds +
+                2 * layer);
+        };
+        LOG_INFO("Aim slots: tilted %s | %s | %s; playing %s | %s | %s; pitch %.2f; groups %04X (idle layer), %04X %04X "
+            "%04X (weapon layers); weapon %s", SequenceName(slots[0]), SequenceName(slots[1]), SequenceName(slots[2]),
+            SequenceName(playing[4]), SequenceName(playing[5]), SequenceName(playing[6]), ref->rotX, group(0), group(4),
+            group(5), group(6), (StanceFlags(ref) & coop::Pose::kWeaponOut) ? "out" : "away");
     }
 
     void SetWeaponOut(TESObjectREFR* ref, bool out)
@@ -1993,10 +1925,6 @@ namespace game
             return result.GetTESForm();
         }
 
-        // Our copy of an explosion (not kept in saves) that only looks and sounds like it: no damage, push,
-        // knock-down, radiation, effect (fire, EMP) or object left behind (step 8.8: a friend's grenade on the host's
-        // game hurt the host's NPCs, on top of the friend's own hits being sent). quiet: nothing to see or hear
-        // either (where our copy of a grenade or missile lands; the real one's is shown where it really went off).
         BGSExplosion* HarmlessExplosion(BGSExplosion* explosion, bool quiet = false)
         {
             if (!explosion)
@@ -2019,21 +1947,18 @@ namespace game
             e->SetFlag(BGSExplosion::kFlags_KnockDownByFormula, false);
             if (quiet)
             {
-                // (The game's own model setter: the copy has its own copy of the name, the real one is untouched.)
                 e->model.SetModelPath(const_cast<char*>(""));
                 e->light = nullptr;
                 e->sound1 = nullptr;
                 e->sound2 = nullptr;
-                e->impactDataSet = nullptr;          // no scorch marks
-                e->imageSpaceModForm.unk04 = 0;      // no screen effect
+                e->impactDataSet = nullptr;
+                e->imageSpaceModForm.unk04 = 0;
                 e->ISradius = 0;
             }
             made[explosion->refID] = e;
             return e;
         }
 
-        // Our copy of a projectile: its explosion harmless and quiet, no push on what it hits, and nothing to pick up
-        // or disarm where it lands (a thrown spear or a mine would be an item only that game has).
         BGSProjectile* HarmlessProjectile(BGSProjectile* projectile)
         {
             if (!projectile)
@@ -2065,7 +1990,6 @@ namespace game
             return false;
         }
 
-        // Our copy of a weapon (not kept in saves) that can't hurt anyone: no damage, criticals or effects.
         TESForm* HarmlessCopy(TESForm* weapon)
         {
             auto it = g_harmless.find(weapon->refID);
@@ -2073,7 +1997,7 @@ namespace game
                 return it->second;
             for (auto& [original, copy] : g_harmless)
                 if (copy == weapon)
-                    return copy;  // already one
+                    return copy;
             NVSEArrayVarInterface::Element result;
             if (g_harmless.size() >= kMaxHarmless ||
                 !g_scripts->CallFunction(g_clone, Player(), nullptr, &result, 1, weapon))
@@ -2088,7 +2012,6 @@ namespace game
             w->criticalEffect = nullptr;
             w->enchantable.enchantItem = nullptr;
             w->limbDamageMult = 0;
-            // Its projectile too (step 8.8): an explosion does its own damage, and any shot pushes what it hits.
             if (w->projectile)
             {
                 BGSProjectile* harmless = HarmlessProjectile(w->projectile);
@@ -2103,14 +2026,12 @@ namespace game
             return copy;
         }
 
-        // Guns, energy weapons and launchers (not melee, unarmed or thrown).
         bool IsGun(const TESObjectWEAP* w)
         {
             return w->eWeaponType >= TESObjectWEAP::kWeapType_OneHandPistol &&
                 w->eWeaponType <= TESObjectWEAP::kWeapType_TwoHandLauncher;
         }
 
-        // Grenades, mines and thrown weapons (step 8.8).
         bool IsThrown(const TESObjectWEAP* w)
         {
             return w->eWeaponType >= TESObjectWEAP::kWeapType_OneHandGrenade &&
@@ -2123,17 +2044,15 @@ namespace game
                 w->eWeaponType == TESObjectWEAP::kWeapType_OneHandLunchboxMine;
         }
 
-        // Only our harmless projectiles are fired (an explosion does its own damage, whatever the weapon's).
         bool CanFire(const TESObjectWEAP* weapon)
         {
             return weapon && g_fire && weapon->projectile && IsHarmlessProjectile(weapon->projectile);
         }
 
-        // What the actor is doing with its weapon (HighProcess::kAnimAction_...), or -1.
         int CurrentAction(TESObjectREFR* ref)
         {
             BaseProcess* process = IsActor(ref) ? static_cast<Actor*>(ref)->baseProcess : nullptr;
-            if (!process || process->processLevel != 0)  // only the high process (nearby actors) has it
+            if (!process || process->processLevel != 0)
                 return -1;
             return static_cast<HighProcess*>(process)->currentAction;
         }
@@ -2146,19 +2065,38 @@ namespace game
             return held && held->IsWeapon() ? static_cast<TESObjectWEAP*>(held) : nullptr;
         }
 
-        // The attack animation (with its sound), and for guns the shots, from `weapon` (a harmless copy). A throw
-        // or a mine: its own animation; what's thrown flies on ReleaseWith.
+        bool WeaponLayerPlays(TESObjectREFR* ref)
+        {
+            AnimData* anim = IsActor(ref) ? ref->GetAnimData() : nullptr;
+            if (!anim)
+                return false;
+            auto* playing = reinterpret_cast<void* const*>(reinterpret_cast<const uint8_t*>(anim) +
+                process::kAnimSequences);
+            return playing[process::kWeaponLayer] != nullptr;
+        }
+
+        void PlayVersions(TESObjectREFR* ref, const std::array<Script*, coop::kAttackVersions>& anims)
+        {
+            int left = coop::PlayAttackVersions(
+                [&](int version) {
+                    if (anims[version])
+                        g_scripts->CallFunctionAlt(anims[version], ref, 0);
+                },
+                [&] { return WeaponLayerPlays(ref); });
+            if (left)
+                LOG_DEBUG("%08X's attack: nothing in its weapon layer, so %d of its up and down versions left out",
+                    ref->refID, left);
+        }
+
         void PlayAttackWith(TESObjectREFR* ref, TESObjectWEAP* weapon, uint8_t shots)
         {
             if (weapon && IsThrown(weapon))
             {
-                Script* anim = IsMine(weapon) ? g_mineAnim : g_throwAnim;
-                g_scripts->CallFunctionAlt(anim ? anim : g_attackAnim, ref, 0);
+                const auto& anims = IsMine(weapon) ? g_mineAnim : g_throwAnim;
+                PlayVersions(ref, anims[0] ? anims : g_attackAnim);
                 return;
             }
-            g_scripts->CallFunctionAlt(g_attackAnim, ref, 0);
-            // The animation doesn't fire guns; FireWeapon does (sound, flash and bullet; a launcher's grenade or
-            // missile, with our harmless explosion).
+            PlayVersions(ref, g_attackAnim);
             if (!weapon || !IsGun(weapon) || !CanFire(weapon))
                 return;
             for (uint8_t i = 0; i < shots; ++i)
@@ -2174,18 +2112,17 @@ namespace game
 
     bool AddAndEquip(TESObjectREFR* ref, uint32_t formId)
     {
-        TESForm* item = LookupForm(formId);  // the id came from another PC: check it before use
+        TESForm* item = LookupForm(formId);
         if (!g_compiled || !ref || !item || !(item->IsArmor() || item->IsWeapon()))
             return false;
         if (item->IsWeapon() && !(item = HarmlessCopy(item)))
             return false;
         g_scripts->CallFunctionAlt(g_addAndEquip, ref, 1, item);
-        // A gun needs ammo, or the actor's AI puts it away and drops it (seen in the puppet lab).
         if (item->IsWeapon() && IsGun(static_cast<TESObjectWEAP*>(item)) && g_addItems)
         {
             TESForm* ammo = static_cast<TESObjectWEAP*>(item)->ammo.ammo;
             if (ammo && ammo->typeID == kFormType_BGSListForm)
-                ammo = static_cast<BGSListForm*>(ammo)->GetNthForm(0);  // any of the ammo it takes
+                ammo = static_cast<BGSListForm*>(ammo)->GetNthForm(0);
             if (ammo && ammo->typeID == kFormType_TESAmmo)
                 g_scripts->CallFunctionAlt(g_addItems, ref, 2, ammo, static_cast<uint32_t>(kPuppetAmmo));
         }
@@ -2227,9 +2164,6 @@ namespace game
         bool attackStarted = action == HighProcess::kAnimAction_Attack && g_myAction != HighProcess::kAnimAction_Attack;
         if (gun)
         {
-            // Guns: each attack starting is a shot, and rounds leaving the magazine add the shots beyond those
-            // (an automatic fires many in one attack). Rounds alone missed most of the Caravan Shotgun's shots
-            // (two-PC test, 2026-10-15: 2 of a barful shared), as they did a Powder Ganger's in step 5.4.
             int rounds = static_cast<int>(Number(g_rounds, player));
             uint32_t gone = 0;
             if (weaponId == g_myWeapon && g_myRounds > rounds)
@@ -2244,8 +2178,6 @@ namespace game
         else
         {
             g_myRounds = -1;
-            // Swings and punches: the attack starting. Throws (grenades, mines): any part of the throw starting (it
-            // may not start at the attack itself), and the throw leaving the hand (step 8.8).
             bool thrown = weapon && IsThrown(weapon);
             if (thrown ? IsAttackPhase(action) && !IsAttackPhase(g_myAction) : attackStarted)
                 shots = 1;
@@ -2262,7 +2194,7 @@ namespace game
 
     void PlayAttack(TESObjectREFR* ref, const std::vector<uint32_t>& worn, uint8_t shots)
     {
-        if (!g_compiled || !g_attackAnim || !ref)
+        if (!g_compiled || !g_attackAnim[0] || !ref)
             return;
         TESObjectWEAP* weapon = nullptr;
         for (uint32_t id : worn)
@@ -2273,7 +2205,7 @@ namespace game
 
     void PlayNpcAttack(TESObjectREFR* ref, uint8_t shots)
     {
-        if (!g_compiled || !g_attackAnim || !ref)
+        if (!g_compiled || !g_attackAnim[0] || !ref)
             return;
         TESObjectWEAP* held = HeldWeapon(ref);
         PlayAttackWith(ref, held ? static_cast<TESObjectWEAP*>(HarmlessCopy(held)) : nullptr, shots);
@@ -2332,7 +2264,6 @@ namespace game
             state.rounds = -1;
             return -1;
         }
-        // Rounds that left the magazine (as for our player's attacks; a reload adds rounds).
         int rounds = static_cast<int>(Number(g_npcRounds, ref));
         int shots = 0;
         if (!switched && state.rounds >= 0 && rounds < state.rounds)
@@ -2352,21 +2283,17 @@ namespace game
 
     namespace
     {
-        // Our questions, each with its own place: several boxes can wait in the game's queue (2026-10-16: another
-        // plugin's on screen, two of ours behind it, and a click on one was taken for the other). Each box gets the
-        // closing function of its id, so a click is always its own question's.
         constexpr int kQuestions = 16;
         struct Question
         {
             bool open = false;
-            volatile int button = -1;  // the button pressed (set when its box closes)
+            volatile int button = -1;
             uint32_t askedAt = 0;
-            char text[1024];           // (the box's own copies are made from these)
+            char text[1024];
             std::string buttons[10];
         };
         Question g_questions[kQuestions];
 
-        // The game's own callback takes the button the same way (0x5B4A70; see addr::kTakeMessageBoxButton).
         template <int N>
         void QuestionClosed()
         {
@@ -2380,7 +2307,7 @@ namespace game
         const std::array<void (*)(), kQuestions> kClosers = Closers(std::make_integer_sequence<int, kQuestions>());
 
         char g_message[1024];
-        void MessageClosed() { reinterpret_cast<uint8_t(__cdecl*)()>(addr::kTakeMessageBoxButton)(); }  // reset it
+        void MessageClosed() { reinterpret_cast<uint8_t(__cdecl*)()>(addr::kTakeMessageBoxButton)(); }
 
         using ShowFn = bool(__cdecl*)(const char*, uint32_t, uint32_t, void (*)(), uint32_t, uint32_t, float, float,
             ...);
@@ -2402,17 +2329,15 @@ namespace game
                 "OK", nullptr);
         }
 
-        // Our boxes waiting to be shown, in the order asked: a question's id, or a plain message (id -1).
         struct Waiting
         {
             int id;
             std::string text;
-            uint32_t refusedSince = 0;  // the game turned it down with no box open (0: hasn't)
+            uint32_t refusedSince = 0;
         };
         std::deque<Waiting> g_waiting;
         constexpr uint32_t kGiveUpMs = 10000;
 
-        // No box on screen or about to be, and the interface ready: the game shows one at once.
         bool BoxFree()
         {
             auto* manager = *reinterpret_cast<const uint8_t* const*>(addr::kInterfaceManager);
@@ -2443,7 +2368,6 @@ namespace game
 
     void RetryMessageBoxes()
     {
-        // One a frame, when no box is open (the game's own queue lost one asked for as another closed: 2026-10-16).
         if (g_waiting.empty() || !BoxFree())
             return;
         Waiting& w = g_waiting.front();
@@ -2468,7 +2392,7 @@ namespace game
     namespace
     {
         uint8_t* HookStart(uintptr_t function, const uint8_t* expect, size_t length, const void* to);
-        uint8_t* g_loadSave = nullptr;  // the game's load by name, as it was before our hook
+        uint8_t* g_loadSave = nullptr;
         bool (*g_mayLoad)(const std::string&) = nullptr;
 
         bool __fastcall LoadSaveHook(void* manager, void*, const char* name, uint32_t a, uint32_t b, uint32_t c)
@@ -2515,7 +2439,6 @@ namespace game
 
     bool QuestionOpen()
     {
-        // (One never answered, a box the game dropped, doesn't count for ever.)
         for (const Question& q : g_questions)
             if (q.open && GetTickCount() - q.askedAt < 120000)
                 return true;
@@ -2560,7 +2483,6 @@ namespace game
         auto* menu = *reinterpret_cast<uint8_t* const*>(addr::kMessageMenu);
         if (!menu)
             return false;
-        // The buttons' list: nodes of (item, next); an item starts with its tile.
         auto* node = menu + addr::kMessageMenuButtons + 4;
         for (int i = 0; node && i < index; ++i)
             node = *reinterpret_cast<uint8_t* const*>(node + 4);
@@ -2594,7 +2516,7 @@ namespace game
             if (it->id == id)
             {
                 g_waiting.erase(it);
-                return;  // (not shown yet)
+                return;
             }
         if (MessageShows(q.text))
             CloseMenu();
@@ -2621,7 +2543,7 @@ namespace game
     int TakeAnswer(int id)
     {
         int choice = TakeChoice(id);
-        return choice == kNeverShown ? 0 : choice < 0 ? -1 : choice == 0 ? 1 : 0;  // (never shown: a no)
+        return choice == kNeverShown ? 0 : choice < 0 ? -1 : choice == 0 ? 1 : 0;
     }
 
     bool RunConsoleLine(const char* line)
@@ -2637,7 +2559,6 @@ namespace game
     {
         if (!g_scripts || !expression || !*expression)
             return "nothing to work out";
-        // Compiled each time (a lab tool, not every frame): a function returning the expression's value.
         std::string text = std::string("Begin Function {}\n  SetFunctionValue ") + expression + "\nEnd\n";
         Script* script = g_scripts->CompileScript(text.c_str());
         if (script)
@@ -2687,14 +2608,14 @@ namespace game
         if (!g_compiled || !g_madeCount || !g_madeGet || !Player())
             return ids;
         int count = static_cast<int>(Number(g_madeCount, Player()));
-        constexpr int kMaxSaved = 128;  // (it's only ever ours, but a save can hold anything)
+        constexpr int kMaxSaved = 128;
         for (int i = 0; i < count && i < kMaxSaved; ++i)
         {
             NVSEArrayVarInterface::Element result;
             if (!g_scripts->CallFunction(g_madeGet, Player(), nullptr, &result, 1, static_cast<uint32_t>(i)))
                 continue;
             TESForm* form = result.GetTESForm();
-            if (form && form->GetIsReference() && (form->refID >> 24) == 0xFF)  // only ever made while playing
+            if (form && form->GetIsReference() && (form->refID >> 24) == 0xFF)
                 ids.push_back(form->refID);
         }
         return ids;
@@ -2729,7 +2650,6 @@ namespace game
     {
         TESObjectWEAP* weapon = g_compiled && IsActor(ref) ? HeldWeapon(ref) : nullptr;
         uintptr_t function = ReloadFunction(ref);
-        // Only the game's own: another plugin's replacement could take other arguments.
         if (!weapon || function != addr::kActorReload)
             return false;
         using ReloadFn = int(__thiscall*)(TESObjectREFR*, TESObjectWEAP*, uint32_t, uint8_t);
@@ -2754,7 +2674,7 @@ namespace game
 
     namespace
     {
-        uintptr_t g_explosionInit = 0;  // the game's (or another plugin's) start of an explosion
+        uintptr_t g_explosionInit = 0;
         std::vector<SeenExplosion> g_explosions;
 
         bool IsOurHarmless(const TESForm* form)
@@ -2768,7 +2688,6 @@ namespace game
 
         void __fastcall ExplosionInitHook(TESObjectREFR* explosion)
         {
-            // (Only its first start, which gives it its process, is a new explosion: the game reuses ids.)
             bool fresh = explosion && !*reinterpret_cast<void* const*>(reinterpret_cast<const uint8_t*>(explosion) +
                 addr::kExplosionProcess);
             reinterpret_cast<void(__fastcall*)(TESObjectREFR*)>(g_explosionInit)(explosion);
@@ -2808,7 +2727,6 @@ namespace game
 
     bool ShowExplosion(uint32_t formId, uint32_t space, float x, float y, float z)
     {
-        // The ids came from another PC: checked before use.
         TESForm* form = LookupForm(formId);
         TESForm* where = LookupForm(space);
         if (!g_compiled || !g_placeAt || !Player() || !form || form->typeID != kFormType_BGSExplosion || !where ||
@@ -2839,7 +2757,6 @@ namespace game
 
     namespace
     {
-        // '|' would start an icon or sound path in the game's message (names come from the network).
         std::string Safe(const char* text)
         {
             std::string safe(text ? text : "");
@@ -2928,17 +2845,16 @@ namespace game
         const void* world = At<const void*>(cell, layout::kCellWorldSpace);
         if (!world)
         {
-            AddRefs(cell, test, baseType, out, nullptr, 0, false);  // indoors: the whole room
+            AddRefs(cell, test, baseType, out, nullptr, 0, false);
             return;
         }
-        // Outdoors: the loaded cells around the player, and the worldspace's persistent doors within range.
         const void* tes = *reinterpret_cast<const void* const*>(layout::kTesSingleton);
         const void* grid = tes ? At<const void*>(tes, layout::kTesGridCells) : nullptr;
         if (grid)
         {
             uint32_t size = At<uint32_t>(grid, layout::kGridSize);
             auto* cells = At<TESObjectCELL* const*>(grid, layout::kGridCellArray);
-            if (cells && size <= 15)  // uGridsToLoad is 5 normally; more would be a broken read
+            if (cells && size <= 15)
                 for (uint32_t i = 0; i < size * size; ++i)
                     AddRefs(cells[i], test, baseType, out, player, range, true);
         }
@@ -2950,7 +2866,7 @@ namespace game
         const void* tes = *reinterpret_cast<const void* const*>(layout::kTesSingleton);
         const void* grid = tes ? At<const void*>(tes, layout::kTesGridCells) : nullptr;
         uint32_t size = grid ? At<uint32_t>(grid, layout::kGridSize) : 0;
-        return size >= 3 && size <= 15 && (size & 1) ? static_cast<int>(size) : 5;  // (else not a real read)
+        return size >= 3 && size <= 15 && (size & 1) ? static_cast<int>(size) : 5;
     }
 
     bool InMenuMode()
@@ -3027,9 +2943,20 @@ namespace game
         }
     }
 
+    bool QuantityPromptOpen()
+    {
+        uint32_t ids[addr::kMenuStackSlots] = {};
+        if (!ReadMenuStack(ids))
+            return false;
+        for (uint32_t id : ids)
+            if (id == 1016)
+                return true;
+        return false;
+    }
+
     bool SetFieldOfView(int degrees)
     {
-        static float s_world = 0;  // the game's own (read before our first change)
+        static float s_world = 0;
         TESObjectREFR* player = Player();
         if (!player || !g_fovNow)
             return false;
@@ -3117,16 +3044,14 @@ namespace game
 
     namespace
     {
-        // A player's looks onto the base form we copied for them (false: not one of those). Gives how many face
-        // arrays were the Traveler's (they get their own).
         bool LooksOntoBase(TESForm* base, const net::PlayerLooks& looks, int& shared)
         {
         if (!base || base->typeID != kFormType_TESNPC ||
             std::find(g_standInBases.begin(), g_standInBases.end(), base->refID) == g_standInBases.end())
-            return false;  // (only a copy we made for a player: never a form the game shares)
+            return false;
         auto* npc = reinterpret_cast<uint8_t*>(base);
         if (!looks.name.empty())
-            SetName(static_cast<TESActorBase*>(base)->fullName.name, looks.name.c_str());  // (their character's name)
+            SetName(static_cast<TESActorBase*>(base)->fullName.name, looks.name.c_str());
         if (TESForm* race = FormOfType<TESForm>(looks.race, kFormType_TESRace))
             if ((At<uint32_t>(race, addr::kRaceFlags) & (addr::kRacePlayable | addr::kRaceChild)) == addr::kRacePlayable)
                 *reinterpret_cast<TESForm**>(npc + npcl::kRace) = race;
@@ -3139,8 +3064,6 @@ namespace game
             *reinterpret_cast<TESForm**>(npc + npcl::kEyes) = eyes;
         *reinterpret_cast<float*>(npc + npcl::kHairLength) = looks.hairLength;
         *reinterpret_cast<uint32_t*>(npc + npcl::kHairColor) = looks.hairColor;
-        // The face's numbers: into its own arrays (a copy of the Traveler shares the Traveler's: then new ones, from
-        // the game's heap).
         const uint8_t* traveler = reinterpret_cast<const uint8_t*>(LookupForm(ids::kStandInBase));
         size_t at = 0;
         for (int i = 0; i < 3; ++i)
@@ -3166,7 +3089,6 @@ namespace game
             for (uint32_t j = 0; j < count; ++j)
                 values[j] = looks.face[at++];
         }
-        // Head parts (beards and the like): the list's first node is part of the form; more from the game's heap.
         uint8_t* node = npc + npcl::kHeadParts;
         *reinterpret_cast<void**>(node) = nullptr;
         *reinterpret_cast<void**>(node + 4) = nullptr;
@@ -3201,12 +3123,10 @@ namespace game
             return false;
         if (wasFemale != looks.female && g_update3D)
         {
-            // (Another body too: the whole character is loaded again.)
             g_scripts->CallFunctionAlt(g_update3D, standIn, 0);
             LOG_INFO("Looks: %08X is now %s: its body loaded again", standIn->refID, looks.female ? "female" : "male");
             return true;
         }
-        // Its head made again with all that.
         bool& egt = *reinterpret_cast<bool*>(addr::kLoadFaceGenEgt);
         bool wasEgt = egt;
         egt = true;
@@ -3224,7 +3144,7 @@ namespace game
         const char* name = *reinterpret_cast<const char* const*>(setting + 8);
         auto at = reinterpret_cast<uintptr_t>(name);
         if (at < 0x00400000 || at >= 0x02000000 || std::strcmp(name, "uExterior Cell Buffer:General") != 0)
-            return -1;  // (not the setting: the game's own strings are in its image)
+            return -1;
         return static_cast<int>(*reinterpret_cast<const uint32_t*>(setting + 4));
     }
 
@@ -3240,7 +3160,7 @@ namespace game
             return type == kFormType_BGSMovableStatic || type == kFormType_TESObjectCONT;
         }
 
-        std::map<uint32_t, bool> g_movable;  // ref -> physics can move it (asked once its 3D is there)
+        std::map<uint32_t, bool> g_movable;
 
         bool IsMovable(TESObjectREFR* ref)
         {
@@ -3249,7 +3169,7 @@ namespace game
                 return it->second;
             NVSEArrayVarInterface::Element result;
             if (!g_isMobile || !ref->GetNiNode() || !g_scripts->CallFunction(g_isMobile, ref, nullptr, &result, 0))
-                return false;  // (asked again once its 3D is there)
+                return false;
             if (g_movable.size() > 20000)
                 g_movable.clear();
             return g_movable[ref->refID] = result.GetNumber() != 0;
@@ -3388,7 +3308,7 @@ namespace game
             return;
         ForEachIn(static_cast<const char*>(data) + layout::kDataHandlerQuests, [&](void* quest)
         {
-            uint32_t h = 2166136261u;  // FNV-1a
+            uint32_t h = 2166136261u;
             auto mix = [&](uint32_t v)
             {
                 for (int i = 0; i < 4; ++i, v >>= 8)
@@ -3613,9 +3533,6 @@ namespace game
         const char* topic = topicNode ? static_cast<const char*>(*topicNode) : nullptr;
         if (!topic)
             return out;
-        // The game moves +0x20 on to the next response as it starts saying one (0x762FF0: it takes the response,
-        // calls NextResponse, then has the NPC say the one it took), so the one being said is the node before it,
-        // or the last one once it's null (two-PC test 2026-10-15: we were a response ahead).
         const void* const* next = At<const void* const*>(topic, layout::kMenuTopicResponseNode);
         const void* response = nullptr;
         int guard = 0;
@@ -3646,23 +3563,20 @@ namespace game
 
     namespace
     {
-        // A line we asked an NPC to say (SayLine): its AI says it a moment later, picking the line again; our
-        // hooks hand it ours (and our response) when it does.
         struct Armed
         {
             const TESForm* topic = nullptr;
             const TESForm* info = nullptr;
             const TESObjectREFR* speaker = nullptr;
             int response = 0;
-            uint32_t until = 0;  // given up on after this (GetTickCount)
+            uint32_t until = 0;
         };
         Armed g_armed;
         constexpr uint32_t kArmedMs = 3000;
-        // Lines said here for someone else's conversation: their scripts are theirs (the host runs them once).
         struct Said { const TESObjectREFR* speaker; const TESForm* info; uint32_t until; };
         std::vector<Said> g_said;
         constexpr uint32_t kSaidMs = 120000;
-        uintptr_t g_pickLine = 0;  // what the picker call called before our hook
+        uintptr_t g_pickLine = 0;
 
         bool IsArmed(const void* topic, const void* speaker)
         {
@@ -3670,32 +3584,24 @@ namespace game
                 static_cast<int32_t>(GetTickCount() - g_armed.until) < 0;
         }
 
-        // Synced radios (Alex, October 2026). A station builds a run of lines at once (Radio New Vegas: DJ clips,
-        // then a song; a pick for each, and each picked twice or more, the last kept) and plays them in turn, each
-        // part by part (its responses) (2026-10-17 lab). What a station plays is read from it every frame and the
-        // host's game shares it with the run. A friend's station builds the host's run (handed the host's lines
-        // when it picks), goes on to the host's line and part, and then to the same spot in it.
-        std::map<uint32_t, RadioLineStart> g_radioNow;  // station -> what it plays (as last read)
-        std::vector<RadioLineStart> g_radioStarts;      // what our stations went on to since the last take
+        std::map<uint32_t, RadioLineStart> g_radioNow;
+        std::vector<RadioLineStart> g_radioStarts;
         bool g_radioFromHost = false;
         struct HostRadio
         {
             uint32_t info = 0, part = 0, seq = 0;
             std::vector<net::RadioPick> run;
-            uint32_t hostStart = 0;  // when the host's station started this part, on our clock (GetTickCount)
-            uint32_t since = 0;      // when ours started what it plays now
-            uint32_t lastPush = 0;   // when ours was last made to go on
-            size_t handing = 0;      // the line of the run ours is handed when it picks next
-            bool handed = false;     // (that one was handed: a pick from another topic is the next line's)
-            bool runUsed = false;    // ours built this run (not handed it again: ours went on past it)
-            int rebuilds = 0;        // times ours was made to build a new run for this one
-            bool aligned = false;    // ours got to the same spot in this part
+            uint32_t hostStart = 0;
+            uint32_t since = 0;
+            uint32_t lastPush = 0;
+            size_t handing = 0;
+            bool handed = false;
+            bool runUsed = false;
+            int rebuilds = 0;
+            bool aligned = false;
         };
-        std::map<uint32_t, HostRadio> g_hostRadio;  // station -> the host's run now
+        std::map<uint32_t, HostRadio> g_hostRadio;
 
-        // The game's radio (Johnny Guitar FalloutRadio.hpp, Conversation.hpp, DialogueItem.hpp): the stations
-        // playing, each with its conversation (lines, each with its responses: the parts), when its part started
-        // and how long it is, and the radios in the world listening, each with its sound.
         struct RadioNode { void* item; RadioNode* next; };
         struct RadioReceiver { TESObjectREFR* radio; Sound sound; Sound staticSound; bool shouldPlay, justStarted,
             inRange, isActor; };
@@ -3703,21 +3609,20 @@ namespace game
         struct RadioItem { RadioNode responses; RadioNode* current; TESForm* info; TESForm* topic; };
         struct RadioStation
         {
-            TESObjectREFR* station;     // 00
-            RadioConversation* conversation;  // 04
-            void* nextConversation;     // 08
-            uint32_t itemStart;         // 0C  ms, the game's clock: when this part started
-            int32_t itemDuration;       // 10  ms (0: not known yet)
-            uint8_t power, targetPower; // 14
+            TESObjectREFR* station;
+            RadioConversation* conversation;
+            void* nextConversation;
+            uint32_t itemStart;
+            int32_t itemDuration;
+            uint8_t power, targetPower;
             uint8_t pad16[2];
-            uint32_t flags;             // 18
-            RadioNode users;            // 1C  RadioReceiver*
+            uint32_t flags;
+            RadioNode users;
         };
         static_assert(offsetof(RadioReceiver, staticSound) == 0x10 && offsetof(RadioReceiver, shouldPlay) == 0x1C);
         static_assert(offsetof(RadioItem, info) == 0x0C && offsetof(RadioItem, topic) == 0x10);
         static_assert(offsetof(RadioStation, itemDuration) == 0x10 && offsetof(RadioStation, users) == 0x1C);
 
-        // What a station plays: its run, which line of it and which part.
         bool ReadStation(const RadioStation* st, RadioLineStart& out)
         {
             const RadioConversation* conv = st->conversation;
@@ -3746,7 +3651,6 @@ namespace game
             return true;
         }
 
-        // A line in the run: where `info` is (from `from` on), or npos.
         size_t FindInRun(const std::vector<net::RadioPick>& run, uint32_t info, size_t from = 0)
         {
             for (size_t i = from; i < run.size(); ++i)
@@ -3760,14 +3664,10 @@ namespace game
             if (IsArmed(topic, b))
                 return const_cast<TESForm*>(g_armed.info);
             using Fn = void*(__thiscall*)(void*, void*, void*, void*, uint32_t, uint32_t, uint32_t);
-            // A radio station (its speaker, a talking activator) picking its next song or DJ line goes through here
-            // too (2026-10-16 lab: Goodsprings' country station). A friend's is handed the host's.
             auto* speaker = static_cast<TESObjectREFR*>(b);
             if (g_radioFromHost && topic && speaker && speaker->baseForm &&
                 speaker->baseForm->typeID == kFormType_BGSTalkingActivator)
             {
-                // Its picks come in the run's order, each line's from its topic (again for the same line, so a pick
-                // from another topic is the next line's: two lines from one topic in a row would get the same).
                 auto it = g_hostRadio.find(speaker->refID);
                 uint32_t id = static_cast<TESForm*>(topic)->refID;
                 if (it != g_hostRadio.end() && !it->second.runUsed)
@@ -3791,13 +3691,10 @@ namespace game
             return reinterpret_cast<Fn>(g_pickLine)(topic, a, b, c, d, e, f);
         }
 
-        uint8_t* g_firstResponse = nullptr;  // DialogueItem::FirstResponse as it was before our hook
-        uint8_t* g_setEndCallback = nullptr;  // BSSoundHandle::SetEndCallback as it was before our hook
-        // The voice each NPC said a line with lately, by ref id (from the game's "when the voice ends" note).
+        uint8_t* g_firstResponse = nullptr;
+        uint8_t* g_setEndCallback = nullptr;
         std::map<uint32_t, Sound> g_voices;
 
-        // In place of BSSoundHandle 0xAD8E60 (thiscall: function, argument): what the game says an NPC said is
-        // given 0x5790F0 with its ref id; we keep that voice so it can be stopped (a line skipped).
         void __fastcall SetEndCallbackHook(Sound* sound, void*, uintptr_t function, uint32_t argument)
         {
             if ((function == addr::kSayEnded || function == addr::kSpeechEnded) && sound && g_voices.size() < 256)
@@ -3805,8 +3702,6 @@ namespace game
             reinterpret_cast<void(__thiscall*)(Sound*, uintptr_t, uint32_t)>(g_setEndCallback)(sound, function, argument);
         }
 
-        // In place of DialogueItem::FirstResponse (thiscall, no arguments): every way the game says a line starts
-        // it so; for our line it then goes on to our response (the list isn't in speaking order).
         bool __fastcall FirstResponseHook(void* item)
         {
             bool any = reinterpret_cast<bool(__thiscall*)(void*)>(g_firstResponse)(item);
@@ -3822,7 +3717,7 @@ namespace game
                  At<uint32_t>(response, layout::kResponseNumber) != static_cast<uint32_t>(g_armed.response); ++i)
             {
                 if (!next(item))
-                    return reinterpret_cast<bool(__thiscall*)(void*)>(g_firstResponse)(item);  // (not there: the first)
+                    return reinterpret_cast<bool(__thiscall*)(void*)>(g_firstResponse)(item);
                 response = current(item);
             }
             LOG_DEBUG("Dialogue: %s starts at response %u (wanted %d)", g_armed.speaker ?
@@ -3831,8 +3726,6 @@ namespace game
             return response != nullptr;
         }
 
-        // Puts a jump to `to` at a game function's start, whose first `length` bytes are `expect`; returns a way
-        // into the function as it was (those bytes, then on), or null if it isn't as expected.
         uint8_t* HookStart(uintptr_t function, const uint8_t* expect, size_t length, const void* to)
         {
             auto* at = reinterpret_cast<uint8_t*>(function);
@@ -3860,7 +3753,6 @@ namespace game
             return back;
         }
 
-        // Points the call at `site` (E8 rel32) to `to`; returns what it called (0 if it isn't a call).
         uintptr_t HookCall(uintptr_t site, const void* to)
         {
             auto* at = reinterpret_cast<uint8_t*>(site);
@@ -3882,13 +3774,12 @@ namespace game
 
     namespace
     {
-        // Stands in for SetGlobalTimeMultiplier at VATS's calls: the speed stays as it is.
         void __fastcall SkipTimeChange(void*, void*, float, bool) {}
     }
 
     namespace
     {
-        uint8_t* g_setSpeed = nullptr;  // SetGlobalTimeMultiplier as it was before the lab's watch
+        uint8_t* g_setSpeed = nullptr;
 
         void __fastcall WatchedSpeedChange(void* timer, void*, float speed, bool now)
         {
@@ -3951,11 +3842,10 @@ namespace game
             return (flags & layout::kMineBaseMask) == layout::kMineBaseFlags;
         }
 
-        // What the mines' check reads (written every frame by SetMineRules; the check may run off the main thread).
         constexpr size_t kMaxPuppets = 8;
         std::atomic<TESObjectREFR*> g_minePuppets[kMaxPuppets] = {};
         std::atomic<bool> g_mineFriendGame{false};
-        uintptr_t g_mineReacts = 0;  // what the mines' check called before us (the game's GetMineReactsToTarget)
+        uintptr_t g_mineReacts = 0;
 
         bool __fastcall MineReactsHook(TESObjectREFR* mine, void*, TESObjectREFR* target, TESObjectREFR* shooter,
             void* ownerFaction)
@@ -3965,7 +3855,7 @@ namespace game
                 for (const auto& puppet : g_minePuppets)
                     if (puppet.load(std::memory_order_relaxed) == target)
                     {
-                        static std::atomic<uint32_t> s_logged{0};  // (once per mine: this runs every frame)
+                        static std::atomic<uint32_t> s_logged{0};
                         if (mine && s_logged.exchange(mine->refID) != mine->refID)
                             LOG_DEBUG("Mines: %08X not set off by a friend's character (%08X)", mine->refID,
                                 target->refID);
@@ -3975,7 +3865,7 @@ namespace game
                     return false;
             }
             using Fn = bool(__thiscall*)(TESObjectREFR*, TESObjectREFR*, TESObjectREFR*, void*);
-            uintptr_t original = g_mineReacts ? g_mineReacts : addr::kMineReactsToTarget;  // (a check mid-hooking)
+            uintptr_t original = g_mineReacts ? g_mineReacts : addr::kMineReactsToTarget;
             return reinterpret_cast<Fn>(original)(mine, target, shooter, ownerFaction);
         }
     }
@@ -4014,7 +3904,6 @@ namespace game
         const void* where = world ? world : mine->parentCell;
         if (!explosion)
             return false;
-        // (As ShowExplosion, but the real one: PlaceAtCell gives it no owner, like a mine going off by itself.)
         g_scripts->CallFunctionAlt(g_placeAt, Player(), 5, explosion, where, FloatArg(mine->posX), FloatArg(mine->posY),
             FloatArg(mine->posZ));
         return true;
@@ -4023,7 +3912,7 @@ namespace game
     namespace
     {
         std::atomic<bool> g_holdLevelUp{false};
-        uintptr_t g_combatCount = 0;  // what the HUD's level-up checks called before us
+        uintptr_t g_combatCount = 0;
 
         int __fastcall LevelUpCombatCount(void* player, void*)
         {
@@ -4084,23 +3973,20 @@ namespace game
 
     namespace
     {
-        uintptr_t g_makeOptions = 0;  // the game's (or another plugin's) maker of the start menu's options
+        uintptr_t g_makeOptions = 0;
         bool g_optionsMade = false;
         void (*g_onHost)() = nullptr;
         void (*g_onJoin)() = nullptr;
-        void (*g_onAddress)() = nullptr;
         void __cdecl HostClicked() { if (g_onHost) g_onHost(); }
         void __cdecl JoinClicked() { if (g_onJoin) g_onJoin(); }
-        void __cdecl AddressClicked() { if (g_onAddress) g_onAddress(); }
 
-        struct SimpleArray  // BSSimpleArray<StartMenu::Option*>
+        struct SimpleArray
         {
             void* vtable;
             uint8_t** items;
             uint32_t count;
         };
 
-        // flags: where it shows (the game's own: 1 the main menu, 2 the pause menu in game, 3 both).
         void* MakeOption(const char* name, void (*clicked)(), uint32_t flags = 1)
         {
             void* option = reinterpret_cast<void* (__cdecl*)(size_t)>(addr::kFormHeapAllocate)(0x10);
@@ -4118,7 +4004,7 @@ namespace game
             reinterpret_cast<void(__cdecl*)()>(g_makeOptions)();
             g_optionsMade = true;
             auto* list = reinterpret_cast<SimpleArray*>(addr::kStartMenuOptions);
-            size_t load = list->count;  // where Load is (ours go after it), or the end
+            size_t load = list->count;
             for (uint32_t i = 0; i < list->count; ++i)
             {
                 uint8_t* o = list->items[i];
@@ -4134,7 +4020,6 @@ namespace game
             MakeOption("Join Co-op", &JoinClicked);
             if (list->count != before + 2)
                 return LOG_WARN("Main menu: couldn't add Host and Join");
-            // Move them up to just after Load.
             for (uint32_t k = 0; k < 2 && load < before; ++k)
             {
                 uint8_t* ours = list->items[before + k];
@@ -4143,23 +4028,17 @@ namespace game
             }
             LOG_INFO("Main menu: added Host Co-op and Join Co-op (after option %u of %u)",
                 static_cast<unsigned>(load < before ? load : before), before);
-            if (g_onAddress)
-            {
-                MakeOption("Co-op Address", &AddressClicked, 2);  // (at the end: in game it shows before Quit's group)
-                LOG_INFO("Pause menu: added Co-op Address");
-            }
         }
     }
 
     bool MainMenuMade() { return g_optionsMade; }
 
-    bool AddCoopToMainMenu(void (*onHost)(), void (*onJoin)(), void (*onAddress)())
+    bool AddCoopToMainMenu(void (*onHost)(), void (*onJoin)())
     {
         if (g_makeOptions)
             return true;
         g_onHost = onHost;
         g_onJoin = onJoin;
-        g_onAddress = onAddress;
         g_makeOptions = HookCall(addr::kMakeStartMenuOptionsCall, reinterpret_cast<const void*>(&MakeOptions));
         if (g_makeOptions && g_makeOptions != addr::kMakeStartMenuOptions)
             LOG_INFO("Main menu: another plugin makes its options too (%08X); ours are added after",
@@ -4214,12 +4093,12 @@ namespace game
             return;
         HostRadio& h = g_hostRadio[line.station];
         if (h.seq == line.seq && h.info == line.info)
-            return;  // (heard again)
+            return;
         if (h.run.size() != line.run.size() ||
             !std::equal(h.run.begin(), h.run.end(), line.run.begin(),
                 [](const net::RadioPick& x, const net::RadioPick& y) { return x.info == y.info && x.topic == y.topic; }))
         {
-            h.run = line.run;  // (a new run: built again)
+            h.run = line.run;
             h.handing = 0;
             h.handed = false;
             h.runUsed = false;
@@ -4262,7 +4141,6 @@ namespace game
             HostRadio& h = it->second;
             if (moved)
                 h.since = now;
-            // Where the host's line is in our run (ours built the host's: the same lines).
             size_t hostLine = FindInRun(read.run, h.info);
             if (hostLine != std::string::npos && !h.runUsed)
             {
@@ -4273,8 +4151,6 @@ namespace game
                     g_radioStarts.push_back(got);
             }
             bool canPush = st->itemDuration > 0 && now - h.lastPush > 500;
-            // Ours is made to go on as when its time is up (the game's FalloutRadio::UpdateStation 0x834260 goes on
-            // when start + length is past; at the run's last line it builds a new run: the host's, handed).
             if (hostLine == std::string::npos)
             {
                 if (canPush && h.rebuilds < 2)
@@ -4300,7 +4176,6 @@ namespace game
                 if (canPush)
                 {
                     h.lastPush = now;
-                    // (Straight to the host's line: from the one before it, not through each.)
                     if (hostLine > read.line + 1)
                     {
                         size_t index = 0;
@@ -4320,13 +4195,11 @@ namespace game
             }
             if (read.line != hostLine || read.part != h.part || h.aligned || now - h.since < 200 ||
                 st->itemDuration <= 1)
-                continue;  // (ahead of the host's: it waits for its next; done; or its length isn't known yet)
-            // Ours plays the host's part: to the same spot. The Pip-Boy plays a station's songs with the music
-            // player from the station's start time (0x8331C0), so tuning it in again starts the song there.
+                continue;
             h.aligned = true;
             uint32_t target = now - h.hostStart;
             if (target < 1000 || target + 1000 >= static_cast<uint32_t>(st->itemDuration) || st->itemStart <= target)
-                continue;  // (close enough, or the host's is about to end)
+                continue;
             st->itemStart -= target;
             int receivers = 0, sought = 0;
             bool pipboy = *reinterpret_cast<RadioStation**>(addr::kPipboyRadioStation) == st &&
@@ -4353,7 +4226,6 @@ namespace game
         return false;
     }
 
-
     bool SayLine(TESObjectREFR* speaker, uint32_t topicId, uint32_t infoId, int response, Sound& sound)
     {
         sound = Sound{};
@@ -4368,20 +4240,14 @@ namespace game
             return static_cast<int32_t>(now - s.until) >= 0 || s.speaker == speaker; }), g_said.end());
         g_said.push_back({speaker, info, now + kSaidMs});
         g_armed = Armed{topic, info, speaker, response, now + kArmedMs};
-        // As the game's Say command has an actor say a topic (0x5C8E1F): its AI process takes it (and says it
-        // a moment later as the NPC's own speech: voice, mouth and the subtitle other plugins such as Floating
-        // Subtitles show; lab 2026-10-15: calling the voice functions ourselves showed nothing with Floating
-        // Subtitles installed). Our hooks hand it our line and response when it does.
         using SayFn = void(__thiscall*)(void*, TESObjectREFR*, TESForm*, uint8_t, uint8_t, uint8_t, uint8_t);
         SayFn say = reinterpret_cast<SayFn>((*reinterpret_cast<void***>(process))[addr::kProcessSaySlot]);
-        // (Its subtitle follows the "dialogue subtitles" option: the game checks general subtitles.)
         auto* general = reinterpret_cast<uint8_t*>(addr::kSettingGeneralSubtitles + 4);
         const auto* dialogue = reinterpret_cast<const uint8_t*>(addr::kSettingDialogueSubtitles + 4);
         uint8_t was = *general;
         *general = *dialogue;
         say(process, speaker, topic, 0, 0, 1, 1);
         *general = was;
-        // (It starts the voice at once, noting its end: lab 2026-10-15, from 0x8DC480.)
         auto voice = g_voices.find(speaker->refID);
         if (voice != g_voices.end())
             sound = voice->second;
@@ -4429,13 +4295,11 @@ namespace game
 
     void ShowSubtitle(TESObjectREFR* speaker, const char* text, bool always)
     {
-        struct SoundHandle { uint32_t id = 0xFFFFFFFF; uint8_t assumeSuccess = 0; uint32_t state = 0; };  // none
+        struct SoundHandle { uint32_t id = 0xFFFFFFFF; uint8_t assumeSuccess = 0; uint32_t state = 0; };
         struct Point { float x, y, z; };
         using Fn = bool(__cdecl*)(const char*, SoundHandle, Point, TESObjectREFR*, bool);
         if (!speaker || !text || !*text)
             return;
-        // Other players' conversations follow the "dialogue subtitles" option: general subtitles (which the game's
-        // ShowText checks) are switched on just for this call if those are off.
         auto* general = reinterpret_cast<uint8_t*>(addr::kSettingGeneralSubtitles + 4);
         const auto* dialogue = reinterpret_cast<const uint8_t*>(addr::kSettingDialogueSubtitles + 4);
         if (!*dialogue && !always)
@@ -4460,7 +4324,6 @@ namespace game
 
     std::string TopicInfoPrompt(const void* info)
     {
-        // (+0x28 String prompt: xNVSE and JIP GameForms.h. Confirmed in game: lab coop screenlines.)
         const char* text = info ? static_cast<const TESTopicInfo*>(info)->prompt.m_data : nullptr;
         return text ? text : "";
     }
@@ -4488,7 +4351,6 @@ namespace game
             return false;
         };
         auto u16 = [&](uint32_t at) { return static_cast<uint16_t>(data[at] | (data[at + 1] << 8)); };
-        // Statement by statement; if they don't add up, any place the bytes of such a command appear counts.
         std::string ops;
         int count = 0;
         uint32_t at = 0;
@@ -4497,7 +4359,7 @@ namespace game
             uint16_t op = u16(at);
             if (op == opcodes::kOnReference)
             {
-                at += 4;  // (0x1C, its reference index; the command follows)
+                at += 4;
                 continue;
             }
             uint16_t length = u16(at + 2);
@@ -4553,7 +4415,7 @@ namespace game
             return out;
         ForEachIn(reinterpret_cast<char*>(player) + layout::kPlayerObjectives, [&](void* o)
         {
-            const TESForm* quest = At<const TESForm*>(o, 0x10);  // BGSQuestObjective +0x10: its quest (JIP)
+            const TESForm* quest = At<const TESForm*>(o, 0x10);
             out.emplace_back(quest ? quest->refID : 0, At<uint32_t>(o, layout::kObjectiveId),
                 At<uint32_t>(o, layout::kObjectiveStatus));
         });
@@ -4599,7 +4461,6 @@ namespace game
         const void* menu = *reinterpret_cast<const void* const*>(addr::kContainerMenu);
         if (menu)
             return At<TESObjectREFR*>(menu, layout::kContainerMenuRef);
-        // Trading (step 7.5): what the merchant sells and its caps are in its merchant container.
         const void* barter = *reinterpret_cast<const void* const*>(addr::kBarterMenu);
         TESObjectREFR* merchant = barter ? At<TESObjectREFR*>(barter, layout::kBarterMenuMerchant) : nullptr;
         if (!merchant)
@@ -4643,7 +4504,6 @@ namespace game
                 continue;
             Item item{id, static_cast<int32_t>(count), health >= 0 && health <= 100 ? static_cast<uint8_t>(health) :
                 net::kNoCondition, mods >= 0 && mods <= 7 ? static_cast<uint8_t>(mods) : uint8_t(0)};
-            // (Stacks of the same kind count as one.)
             auto same = std::find_if(out.begin(), out.end(), [&](const Item& o) {
                 return o.id == item.id && o.health == item.health && o.mods == item.mods; });
             if (same != out.end())
@@ -4695,7 +4555,7 @@ namespace game
     {
         using GetByTypeFn = const void*(__thiscall*)(const void* list, uint8_t type);
         TESObjectREFR* top = nullptr;
-        for (int depth = 0; ref && depth < 8; ++depth)  // (a chain of them; a loop would be a broken save)
+        for (int depth = 0; ref && depth < 8; ++depth)
         {
             const void* extra = reinterpret_cast<GetByTypeFn>(addr::kExtraListGetByType)(&ref->extraDataList,
                 layout::kExtraEnableStateParent);
@@ -4788,25 +4648,23 @@ namespace game
     {
         using Kind = net::PlayerCommandKind;
         bool g_mirroring = false;
-        bool g_screenFromHost = false;  // friend: our screen and controls follow the host's alone
+        bool g_screenFromHost = false;
         int g_inLine = 0;
         std::vector<net::PlayerCommand> g_playerCommands;
-        std::set<const Script*> g_reportedScripts;  // (logged once each: which scripts are mirrored)
+        std::set<const Script*> g_reportedScripts;
 
         struct Watched
         {
             const char* name;
             Kind kind;
             Cmd_Execute original = nullptr;
-            bool kill = false;   // only watched for a script killing our player (never sent)
-            bool popup = false;  // only watched for the DLCs' intro boxes (skipped: never sent)
-            uint32_t params = 0; // the command's parameters (its CommandInfo's numParams)
+            bool kill = false;
+            bool popup = false;
+            uint32_t params = 0;
         };
-        // The DLCs' and packs' intro popups (DESIGN build order 15, Alex: skipped when coming out of Doc Mitchell's):
-        // their message boxes and the packs' items' "added" notes (the items are given quietly).
         bool g_skipPopups = false;
-        std::set<uint32_t> g_popupMessages;  // MESG ids
-        std::set<uint32_t> g_popupScripts;   // the packs' start scripts (their AddItems: quiet)
+        std::set<uint32_t> g_popupMessages;
+        std::set<uint32_t> g_popupScripts;
         bool g_scriptKill = false;
         Watched g_watched[] = {
             {"AddItem", Kind::AddItem}, {"AddItemHealthPercent", Kind::AddItem}, {"RemoveItem", Kind::RemoveItem},
@@ -4822,47 +4680,39 @@ namespace game
 
         uint32_t FormIdOf(const TESForm* f) { return f ? f->refID : 0; }
 
-        // The screen's image space and the player's controls: one authority, the host's game (Dead Money playthrough,
-        // 2026-10-16: the friend arrived in the Villa after the host's quest had faded the host back in, and the Villa's
-        // trigger blacked the friend's screen out there with nothing left to undo it). So the host's go to friends
-        // whatever script did them, and a friend's own scripts' don't count.
-        // The player's AI package too (Dead Money's Villa trigger gave the friend's player its waking-up package, and
-        // only the host's quest takes it away: the friend never got control back).
         bool IsScreenOrControls(Kind k, const TESObjectREFR* on)
         {
             return k == Kind::AddImageSpaceModifier || k == Kind::RemoveImageSpaceModifier || k == Kind::DisableControls ||
                 k == Kind::EnableControls ||
                 ((k == Kind::AddPlayerPackage || k == Kind::RemovePlayerPackage) && on && on == Player());
         }
+        bool TakesAway(Kind k)
+        {
+            return k == Kind::AddImageSpaceModifier || k == Kind::DisableControls || k == Kind::AddPlayerPackage;
+        }
 
-        // The player's whole inventory going into a container (or coming back) is the story's too, whatever script does
-        // it outside a conversation (Dead Money takes everyone's gear in a trigger the host walks into, and friends are
-        // brought along, never touching it; it gives it back in another).
         bool IsWholeInventory(Kind k, const TESObjectREFR* on)
         {
             return (k == Kind::RemoveAllItems || k == Kind::RemoveAllTypedItems) && on && on == Player() && !g_inLine;
         }
 
-        // What a quest script (a quest stage's, no form of its own: id 0; the console's: made while playing, lab 2026-10-16)
-        // did: noted for friends.
-        void Note(const Watched& w, ParamInfo* paramInfo, void* scriptData, TESObjectREFR* thisObj, Script* scriptObj,
-            ScriptEventList* eventList, UInt32* opcodeOffsetPtr)
+        bool Note(const Watched& w, ParamInfo* paramInfo, void* scriptData, TESObjectREFR* thisObj, Script* scriptObj,
+            ScriptEventList* eventList, UInt32* opcodeOffsetPtr, net::PlayerCommand& c)
         {
             if (g_mirroring && scriptObj && !g_ourScripts.count(scriptObj) && g_reportedScripts.size() < 256 &&
                 g_reportedScripts.insert(scriptObj).second)
                 LOG_DEBUG("Scripted: %s from script %08X (type %u)%s", w.name, scriptObj->refID, scriptObj->info.type,
                     g_inLine ? " in a dialogue line" : "");
-            // (A container's whole inventory to our player, too: RemoveAllItems on it with our player as the target.)
             bool anyScript = IsScreenOrControls(w.kind, thisObj) || IsWholeInventory(w.kind, thisObj) ||
                 (w.kind == Kind::RemoveAllItems && thisObj && thisObj != Player() && !g_inLine);
             if (!g_mirroring || !scriptObj || g_ourScripts.count(scriptObj) || g_playerCommands.size() >= 128 ||
                 (!anyScript && (g_inLine || !(scriptObj->info.type == Script::eType_Quest || scriptObj->refID == 0 ||
                     (scriptObj->refID >> 24) == 0xFF))))
-                return;  // (quest scripts; a quest stage's, no form of its own: id 0; the console's, made while playing)
+                return false;
             TESObjectREFR* player = Player();
-            net::PlayerCommand c;
+            c = net::PlayerCommand{};
             c.kind = w.kind;
-            UInt32 offset = *opcodeOffsetPtr;  // (our own copy: the command reads its arguments itself after)
+            UInt32 offset = *opcodeOffsetPtr;
             TESForm* form = nullptr;
             TESObjectREFR* ref = nullptr;
             UInt32 a = 0, b = 0, d = 0;
@@ -4877,7 +4727,7 @@ namespace game
                 if (thisObj != player || !(withHealth ?
                     g_scripts->ExtractArgsEx(paramInfo, scriptData, &offset, scriptObj, eventList, &form, &a, &health, &b) :
                     g_scripts->ExtractArgsEx(paramInfo, scriptData, &offset, scriptObj, eventList, &form, &a, &b)))
-                    return;
+                    return false;
                 c.form = FormIdOf(form);
                 c.n[0] = static_cast<int32_t>(a);
                 c.n[1] = static_cast<int32_t>(b);
@@ -4885,21 +4735,21 @@ namespace game
             }
             case Kind::RemoveAllItems:
                 if (!g_scripts->ExtractArgsEx(paramInfo, scriptData, &offset, scriptObj, eventList, &ref, &a))
-                    return;
+                    return false;
                 if (thisObj == player && ref)
-                    c.ref = RefId(ref);  // ours into a container
+                    c.ref = RefId(ref);
                 else if (ref == player && thisObj)
                 {
-                    c.kind = Kind::GiveAllItems;  // a container's into ours
+                    c.kind = Kind::GiveAllItems;
                     c.ref = RefId(thisObj);
                 }
                 else
-                    return;
+                    return false;
                 break;
             case Kind::RemoveAllTypedItems:
                 if (thisObj != player ||
                     !g_scripts->ExtractArgsEx(paramInfo, scriptData, &offset, scriptObj, eventList, &ref, &a, &b, &d) || !ref)
-                    return;
+                    return false;
                 c.ref = RefId(ref);
                 c.n[0] = static_cast<int32_t>(a);
                 c.n[1] = static_cast<int32_t>(b);
@@ -4909,7 +4759,7 @@ namespace game
             case Kind::UnequipItem:
                 if (thisObj != player ||
                     !g_scripts->ExtractArgsEx(paramInfo, scriptData, &offset, scriptObj, eventList, &form, &a, &b))
-                    return;
+                    return false;
                 c.form = FormIdOf(form);
                 c.n[0] = static_cast<int32_t>(a);
                 c.n[1] = static_cast<int32_t>(b);
@@ -4921,33 +4771,32 @@ namespace game
             case Kind::CastOnSelf:
                 if (thisObj != player ||
                     !g_scripts->ExtractArgsEx(paramInfo, scriptData, &offset, scriptObj, eventList, &form, &a))
-                    return;
+                    return false;
                 c.form = FormIdOf(form);
                 break;
             case Kind::AddImageSpaceModifier:
             case Kind::RemoveImageSpaceModifier:
                 if (!g_scripts->ExtractArgsEx(paramInfo, scriptData, &offset, scriptObj, eventList, &form, &a))
-                    return;
+                    return false;
                 c.form = FormIdOf(form);
                 break;
             case Kind::AddPlayerPackage:
                 if (thisObj != player || !g_scripts->ExtractArgsEx(paramInfo, scriptData, &offset, scriptObj, eventList, &form))
-                    return;
+                    return false;
                 c.form = FormIdOf(form);
                 break;
             case Kind::RemovePlayerPackage:
                 if (thisObj != player)
-                    return;
+                    return false;
                 break;
             case Kind::DisableControls:
             case Kind::EnableControls:
             {
-                // (The game's defaults: disabling, movement, Pip-Boy, fighting and view only; enabling, all.)
                 bool off = w.kind == Kind::DisableControls;
                 UInt32 v[7] = {1, 1, 1, 1, off ? 0u : 1u, off ? 0u : 1u, off ? 0u : 1u};
                 if (!g_scripts->ExtractArgsEx(paramInfo, scriptData, &offset, scriptObj, eventList, &v[0], &v[1], &v[2],
                     &v[3], &v[4], &v[5], &v[6]))
-                    return;
+                    return false;
                 for (int i = 0; i < 7; ++i)
                     if (v[i])
                         c.flags |= static_cast<uint8_t>(1 << i);
@@ -4955,9 +4804,24 @@ namespace game
             }
             }
             if (net::IsMadeWhilePlaying(c.form) || net::IsMadeWhilePlaying(c.ref))
-                return;  // (only the host's game has those)
+                return false;
+            return true;
+        }
+
+        void Relay(const Watched& w, const net::PlayerCommand& c)
+        {
             LOG_DEBUG("Scripted: friends follow %s %08X %08X", w.name, c.form, c.ref);
             g_playerCommands.push_back(c);
+        }
+
+        int PerkRanks(uint32_t perk)
+        {
+            TESForm* form = LookupForm(perk);
+            NVSEArrayVarInterface::Element result;
+            if (!g_perkRanks || !form || !Player() ||
+                !g_scripts->CallFunction(g_perkRanks, Player(), nullptr, &result, 1, form))
+                return -1;
+            return static_cast<int>(result.GetNumber());
         }
 
         template <int I>
@@ -4965,9 +4829,6 @@ namespace game
         {
             if (g_watched[I].popup)
             {
-                // ShowMessage: one of the DLCs' intro boxes isn't shown. (Its message, then up to 9 numbers for the
-                // text: all read, so none is written past.)
-                // (Read only if the command has 10 parameters or fewer: we have room for 10.)
                 if (g_skipPopups && scriptObj && !g_popupMessages.empty() && g_watched[I].params <= 10)
                 {
                     UInt32 offset = *opcodeOffsetPtr;
@@ -4988,7 +4849,6 @@ namespace game
             if (g_skipPopups && g_watched[I].kind == Kind::AddItem && scriptObj && thisObj && thisObj == Player() &&
                 g_popupScripts.count(scriptObj->refID) && g_pcAddItem && std::strcmp(g_watched[I].name, "AddItem") == 0)
             {
-                // A pack's item: given quietly (no "added" note for each).
                 UInt32 offset = *opcodeOffsetPtr, count = 1, hide = 0;
                 TESForm* item = nullptr;
                 if (g_scripts->ExtractArgsEx(paramInfo, scriptData, &offset, scriptObj, eventList, &item, &count, &hide) &&
@@ -5001,13 +4861,12 @@ namespace game
             }
             if (g_watched[I].kill)
             {
-                // A script killing our player (Dead Money's collar): no downed state (Alex, October 2026).
                 if (thisObj && thisObj == Player() && scriptObj && !g_ourScripts.count(scriptObj))
                     g_scriptKill = true;
                 return g_watched[I].original(paramInfo, scriptData, thisObj, containingObj, scriptObj, eventList, result,
                     opcodeOffsetPtr);
             }
-            if (g_screenFromHost && (IsScreenOrControls(g_watched[I].kind, thisObj) ||
+            if (g_screenFromHost && ((IsScreenOrControls(g_watched[I].kind, thisObj) && TakesAway(g_watched[I].kind)) ||
                 IsWholeInventory(g_watched[I].kind, thisObj)) && scriptObj && !g_ourScripts.count(scriptObj))
             {
                 static std::set<const Script*> s_blocked;
@@ -5017,9 +4876,17 @@ namespace game
                 *result = 0;
                 return true;
             }
-            Note(g_watched[I], paramInfo, scriptData, thisObj, scriptObj, eventList, opcodeOffsetPtr);
-            return g_watched[I].original(paramInfo, scriptData, thisObj, containingObj, scriptObj, eventList, result,
+            net::PlayerCommand c;
+            bool noted = Note(g_watched[I], paramInfo, scriptData, thisObj, scriptObj, eventList, opcodeOffsetPtr, c);
+            bool perk = noted && (c.kind == Kind::AddPerk || c.kind == Kind::RemovePerk);
+            int ranks = perk ? PerkRanks(c.form) : -1;
+            if (noted && !perk)
+                Relay(g_watched[I], c);
+            bool done = g_watched[I].original(paramInfo, scriptData, thisObj, containingObj, scriptObj, eventList, result,
                 opcodeOffsetPtr);
+            if (perk && (ranks < 0 || PerkRanks(c.form) != ranks))
+                Relay(g_watched[I], c);
+            return done;
         }
         template <int... I>
         constexpr std::array<Cmd_Execute, sizeof...(I)> Wrappers(std::integer_sequence<int, I...>)
@@ -5068,7 +4935,6 @@ namespace game
         g_popupScripts.clear();
         if (!on)
             return;
-        // FalloutNV.esm's range (the packs' forms are in it), then each DLC's own (its file's place in the load order).
         for (uint32_t id : ids::kPackPopups)
             g_popupMessages.insert(id);
         for (uint32_t id : ids::kPackScripts)
@@ -5245,7 +5111,7 @@ namespace game
     {
         if (!ref)
             return;
-        if ((ref->refID >> 24) == 0xFF)  // made while playing
+        if ((ref->refID >> 24) == 0xFF)
             Remove(ref);
         else if (g_disable)
             g_scripts->CallFunctionAlt(g_disable, ref, 0);
@@ -5301,9 +5167,6 @@ namespace game
             return info;
         using GetByTypeFn = const void*(__thiscall*)(const void* list, uint8_t type);
         auto getByType = reinterpret_cast<GetByTypeFn>(addr::kExtraListGetByType);
-        // A container counts as a door that's always closed: only its lock is kept the same (Alex, 2026-10-19
-        // session: a safe a friend picked stayed locked for the host). (Every one: one never locked here may be
-        // locked in the other game.)
         if (box)
             info.open = 3;
         else if (g_openState)
@@ -5367,8 +5230,6 @@ namespace game
         uint32_t used = *reinterpret_cast<const uint16_t*>(manager + process::kManagerObjectCount);
         uint32_t begin = *reinterpret_cast<const uint32_t*>(manager + process::kManagerBegin);
         uint32_t end = *reinterpret_cast<const uint32_t*>(manager + process::kManagerEnd);
-        // (Step 5.2 test: the host found no one for ~5 s once. If the list's end can pass its used slots, this
-        // says so; the memory it has room for is still safe to read.)
         static uint32_t s_nextWarn = 0;
         if ((begin > end || end > used) && coop::IsDue(GetTickCount(), s_nextWarn))
         {
@@ -5440,7 +5301,6 @@ namespace game
 
     namespace
     {
-        // True if it changed.
         bool SetBaseEssential(TESForm* form, bool on)
         {
             if (!form || form->typeID != kFormType_TESNPC)
@@ -5490,8 +5350,6 @@ namespace game
 
     bool IsGeneric(TESObjectREFR* actor)
     {
-        // A levelled actor's base is made while playing; the form it was levelled from (an NPC or creature, or a
-        // levelled list) is what more of it are made from (as friends' copies are: step 5.4).
         BaseInfo b = DescribeBase(actor);
         return net::IsMadeWhilePlaying(b.base) && b.leveledBase && !net::IsMadeWhilePlaying(b.leveledBase) &&
             (b.leveledBaseType == kFormType_TESNPC || b.leveledBaseType == kFormType_TESCreature ||
@@ -5545,10 +5403,9 @@ namespace game
 
     bool PlayIdle(TESObjectREFR* ref, uint32_t idleId)
     {
-        TESForm* idle = LookupForm(idleId);  // the id came from another PC: check it before use
+        TESForm* idle = LookupForm(idleId);
         if (!g_compiled || !g_playIdle || !ref || !idle || idle->typeID != kFormType_TESIdleForm)
             return false;
-        // (Not one with a list of children: JIP's PlayIdleEx walks it and crashed on an empty entry, 2026-10-16.)
         if (*reinterpret_cast<void* const*>(reinterpret_cast<const uint8_t*>(idle) + layout::kIdleChildren))
         {
             static std::set<uint32_t> s_skipped;
@@ -5636,20 +5493,15 @@ namespace game
 
     namespace
     {
-        // Text chat's line (Alex: no menu, so no pause or blur; in the lower half of the screen). What's typed comes
-        // from Windows' typed characters (the game's window, its messages seen first by ours); the game is kept from
-        // the keys meanwhile with xNVSE's DisableKey (the ones not disabled already: given back after).
         std::mutex g_chatMutex;
         coop::ChatDraft g_chatDraft;
-        bool g_chatTyping = false;        // (both: under g_chatMutex)
+        bool g_chatTyping = false;
         bool g_chatChanged = false;
-        bool g_chatTalking = false;       // our player is talking (voice chat): shown where the line is
+        bool g_chatTalking = false;
         std::vector<std::string> g_chatSent;
         HWND g_gameWindow = nullptr;
         WNDPROC g_gameWndProc = nullptr;
-        std::vector<int> g_chatKeysOff;   // keys we disabled (main thread)
-        // Typing into a box of ours instead (Alex, 2026-10-30: the host's IP at the main menu, hidden): the same
-        // window messages, its own draft (under g_chatMutex).
+        std::vector<int> g_chatKeysOff;
         bool g_entryTyping = false;
         coop::ChatDraft g_entryDraft;
         EntryState g_entryState = EntryState::None;
@@ -5672,7 +5524,7 @@ namespace game
                             g_entryState = done == coop::ChatDraft::Done::Send ? EntryState::Done : EntryState::Cancelled;
                         }
                     }
-                    return 0;  // (typing: the keys are ours)
+                    return 0;
                 }
                 if (g_chatTyping)
                 {
@@ -5689,7 +5541,7 @@ namespace game
                             g_chatTyping = false;
                         g_chatChanged = true;
                     }
-                    return 0;  // (typing: the keys are ours)
+                    return 0;
                 }
             }
             return CallWindowProcA(g_gameWndProc, window, message, w, l);
@@ -5719,8 +5571,6 @@ namespace game
             return g_gameWndProc != nullptr;
         }
 
-        // The chat's texts on the HUD (made once): the line being typed, centred in the lower half above the
-        // subtitles, and the lines floating above players (placed by UpdateChatAbove), in the HUD's colour.
         void MakeChatHud()
         {
             NVSEArrayVarInterface::Element result;
@@ -5743,7 +5593,6 @@ namespace game
                     "<systemcolor>1</systemcolor><string> </string></text>";
                 g_scripts->CallFunction(g_chatHud, Player(), nullptr, &result, 1, xml.c_str());
             }
-            // The revive bar: under the crosshair, in the HUD's colour.
             static const char kRevive[] =
                 "<text name=\"NVCoopRevive\"><visible>0</visible>"
                 "<x><copy src=\"screen()\" trait=\"width\"/><div>2</div></x>"
@@ -5751,7 +5600,6 @@ namespace game
                 "<font>2</font><justify>&center;</justify><wrapwidth>900</wrapwidth>"
                 "<systemcolor>1</systemcolor><string> </string></text>";
             g_scripts->CallFunction(g_chatHud, Player(), nullptr, &result, 1, kRevive);
-            // Friends' markers: their name with a chevron under it, higher than a chat line above them.
             for (int slot = 0; slot < kMarkSlots; ++slot)
             {
                 std::string xml = "<text name=\"NVCoopMark" + std::to_string(slot) + "\"><visible>0</visible>"
@@ -5767,10 +5615,10 @@ namespace game
 
         struct ChatAbove
         {
-            uint32_t who = 0;      // the character's ref id (0: none)
+            uint32_t who = 0;
             std::string text;
-            uint32_t until = 0;    // GetTickCount
-            bool changed = false;  // the text is new
+            uint32_t until = 0;
+            bool changed = false;
             bool shown = false;
         };
         ChatAbove g_above[kChatAboveSlots];
@@ -5791,7 +5639,6 @@ namespace game
                 return;
             if (keep)
             {
-                // Keyboard 1-255, then the mouse's buttons (256 on: no shooting while typing).
                 for (int key = 1; key < 264; ++key)
                     if (g_scripts->CallFunction(g_keyDisabled, Player(), nullptr, &result, 1, static_cast<uint32_t>(key)) &&
                         result.GetNumber() == 0)
@@ -5900,7 +5747,7 @@ namespace game
             uint32_t count = *reinterpret_cast<uint32_t*>(keyframes + 0x10);
             if (!values || count != 16)
                 continue;
-            values[1] = opening;  // BigAah: the mouth wide open
+            values[1] = opening;
             set = true;
         }
         return set;
@@ -5940,8 +5787,6 @@ namespace game
 
     void RemoveTutorialFades()
     {
-        // (As console lines with the ids: an image space modifier in a script variable wasn't taken off, lab
-        // 2026-10-17: the waking-up fade left the looks menu white; the console line cleared it.)
         for (uint32_t fade : ids::kTutorialFades)
         {
             char line[64];
@@ -5977,19 +5822,16 @@ namespace game
 
     namespace
     {
-        // The game's own numbers, read before co-op balanced first changes them (Normal puts them back).
         struct Tuned { const char* name; float original = 0; bool read = false; };
         Tuned g_tuned[] = {{"fDiffMultHPToPCVE"}, {"fDiffMultHPToPCE"}, {"fDiffMultHPToPCN"}, {"fDiffMultHPToPCH"},
             {"fDiffMultHPToPCVH"}, {"fDiffMultHPByPCVE"}, {"fDiffMultHPByPCE"}, {"fDiffMultHPByPCN"}, {"fDiffMultHPByPCH"},
-            {"fDiffMultHPByPCVH"}, {"fAVDCarryWeightsBase"}, {"iLevelUpSkillPointsBase"}, {"iXPLevelKillCreatureVeryEasy"},
-            {"iXPLevelKillCreatureEasy"}, {"iXPLevelKillCreatureAverage"}, {"iXPLevelKillCreatureHard"},
-            {"iXPLevelKillCreatureVeryHard"}, {"iXPLevelKillNPCVeryEasy"}, {"iXPLevelKillNPCEasy"},
-            {"iXPLevelKillNPCAverage"}, {"iXPLevelKillNPCHard"}, {"iXPLevelKillNPCVeryHard"}};
+            {"fDiffMultHPByPCVH"}, {"fAVDCarryWeightsBase"},
+            {"iXPRewardKillOpponentVeryEasy"}, {"iXPRewardKillOpponentEasy"}, {"iXPRewardKillOpponentAverage"},
+            {"iXPRewardKillOpponentHard"}, {"iXPRewardKillOpponentVeryHard"}, {"iXPRewardKillNPCVeryEasy"},
+            {"iXPRewardKillNPCEasy"}, {"iXPRewardKillNPCAverage"}, {"iXPRewardKillNPCHard"}, {"iXPRewardKillNPCVeryHard"}};
         struct TunedEffect { uint32_t item; int magnitude = -1, duration = -1; };
         TunedEffect g_tunedEffects[] = {{ids::kStimpak}, {ids::kSuperStimpak}};
 
-        // Body parts' damage times, as the game had them (read before the first change): head (parts 1, 2), arms and
-        // legs (3 to 12).
         struct PartMult { TESForm* list; int part; float original; };
         std::vector<PartMult> g_partMults;
         bool g_partsRead = false;
@@ -6046,15 +5888,16 @@ namespace game
             return out;
         }
 
-        // Medium and heavy armor, with the DR each had (read before the first change).
         struct ArmorDR { TESForm* armor; uint16_t original; bool heavy; };
         std::vector<ArmorDR> g_armors;
-        // Loot lists that give only food, drink and medicine, with the chance of nothing each had.
         struct SupplyList { TESForm* list; uint8_t original; };
         std::vector<SupplyList> g_supplyLists;
-        std::vector<SupplyList> g_boxLists;  // loot lists only boxes and vendors use
+        std::vector<SupplyList> g_boxLists;
+        struct AmmoValue { TESForm* ammo; uint32_t original; };
+        std::vector<AmmoValue> g_ammoValues;
+        struct AmmoCount { uint8_t* count; int32_t original; bool wide; };
+        std::vector<AmmoCount> g_ammoCounts;
         bool g_armorAndLootRead = false;
-        // Combat styles, as the game had them.
         struct StyleWas { TESForm* style; float coverRadius, takeCover; uint8_t sideStep; uint16_t flags; };
         std::vector<StyleWas> g_styles;
 
@@ -6066,7 +5909,6 @@ namespace game
             {
                 uint32_t flags = At<uint32_t>(armor, layout::kArmorBipedFlags);
                 uint16_t dr = At<uint16_t>(armor, layout::kArmorRating);
-                // (Our reads checked against xNVSE's GetArmorAR on the first few.)
                 if (checked < 20 && g_armorDR)
                 {
                     NVSEArrayVarInterface::Element result;
@@ -6086,13 +5928,12 @@ namespace game
                 g_styles.push_back({style, At<float>(style, layout::kStyleCoverRadius),
                     At<float>(style, layout::kStyleTakeCover), At<uint8_t>(style, layout::kStyleSideStep),
                     At<uint16_t>(style, layout::kStyleFlags)});
-            // Loot lists boxes and vendors use, and those that kit out characters (followed into lists in lists).
             auto forEachNode = [](const uint8_t* node, auto&& use) {
                 for (int n = 0; node && n < 1000; node = *reinterpret_cast<const uint8_t* const*>(node + 4), ++n)
                 {
                     const uint8_t* data = *reinterpret_cast<const uint8_t* const*>(node);
                     if (!data)
-                        break;  // (an empty list's first node)
+                        break;
                     use(data);
                 }
             };
@@ -6102,13 +5943,13 @@ namespace game
                     if (!list || list->typeID != layout::kFormTypeLevItem || !into.insert(list).second)
                         return;
                     forEachNode(reinterpret_cast<const uint8_t*>(list) + layout::kLevListEntries, [&](const uint8_t* e) {
-                        follow(*reinterpret_cast<const TESForm* const*>(e), into);  // (an entry's form at +0)
+                        follow(*reinterpret_cast<const TESForm* const*>(e), into);
                     });
                 };
             auto itemsOf = [&](uint8_t type, uint32_t offset, std::set<const TESForm*>& into) {
                 for (TESForm* holder : LoadedOfType(type))
                     forEachNode(reinterpret_cast<const uint8_t*>(holder) + offset, [&](const uint8_t* e) {
-                        follow(*reinterpret_cast<const TESForm* const*>(e + 4), into);  // (a FormCount's form at +4)
+                        follow(*reinterpret_cast<const TESForm* const*>(e + 4), into);
                     });
             };
             itemsOf(layout::kFormTypeContainer, layout::kContainerItemsOfBox, boxLists);
@@ -6121,7 +5962,6 @@ namespace game
                     g_boxLists.push_back({list, At<uint8_t>(list, layout::kLevListChanceNone)});
                     continue;
                 }
-                // Every entry food, drink or medicine (at least one).
                 bool supplies = false, other = false;
                 int entries = 0;
                 for (auto* node = reinterpret_cast<const uint8_t*>(list) + layout::kLevListEntries; node && entries < 1000;
@@ -6129,7 +5969,7 @@ namespace game
                 {
                     const uint8_t* entry = *reinterpret_cast<const uint8_t* const*>(node);
                     if (!entry)
-                        break;  // (an empty list's first node)
+                        break;
                     const TESForm* item = *reinterpret_cast<const TESForm* const*>(entry);
                     uint8_t kind = item && item->typeID == layout::kFormTypeAlchemy ?
                         At<uint8_t>(item, layout::kAlchFlags) & (layout::kAlchFood | layout::kAlchMedicine) : 0;
@@ -6140,6 +5980,41 @@ namespace game
                 if (supplies && !other)
                     g_supplyLists.push_back({list, At<uint8_t>(list, layout::kLevListChanceNone)});
             }
+            int ammoChecked = 0, ammoDiffer = 0;
+            for (TESForm* ammo : LoadedOfType(layout::kFormTypeAmmo))
+            {
+                uint32_t value = At<uint32_t>(ammo, layout::kAmmoValue);
+                if (ammoChecked < 20 && g_itemValue)
+                {
+                    NVSEArrayVarInterface::Element result;
+                    if (g_scripts->CallFunction(g_itemValue, Player(), nullptr, &result, 1, ammo))
+                    {
+                        ++ammoChecked;
+                        ammoDiffer += static_cast<uint32_t>(result.GetNumber()) != value;
+                    }
+                }
+                g_ammoValues.push_back({ammo, value});
+            }
+            auto isAmmo = [](const TESForm* form) { return form && form->typeID == layout::kFormTypeAmmo; };
+            for (const SupplyList& l : g_boxLists)
+            {
+                if (At<uint32_t>(l.list, layout::kLevListGlobal))
+                    continue;
+                forEachNode(reinterpret_cast<const uint8_t*>(l.list) + layout::kLevListEntries, [&](const uint8_t* e) {
+                    if (isAmmo(*reinterpret_cast<const TESForm* const*>(e)))
+                        g_ammoCounts.push_back({const_cast<uint8_t*>(e) + layout::kLevEntryCount,
+                            *reinterpret_cast<const int16_t*>(e + layout::kLevEntryCount), false});
+                });
+            }
+            size_t ammoInLists = g_ammoCounts.size();
+            for (TESForm* box : LoadedOfType(layout::kFormTypeContainer))
+                forEachNode(reinterpret_cast<const uint8_t*>(box) + layout::kContainerItemsOfBox, [&](const uint8_t* e) {
+                    if (isAmmo(*reinterpret_cast<const TESForm* const*>(e + 4)))
+                        g_ammoCounts.push_back({const_cast<uint8_t*>(e), *reinterpret_cast<const int32_t*>(e), true});
+                });
+            LOG_INFO("Balance: %zu kinds of ammo (value read as xNVSE does on %d of %d); %zu ammo entries in lists only "
+                "boxes and vendors use, %zu in boxes' own items", g_ammoValues.size(), ammoChecked - ammoDiffer, ammoChecked,
+                ammoInLists, g_ammoCounts.size() - ammoInLists);
             LOG_INFO("Balance: %zu medium and heavy armors (%d light; DR read as xNVSE does on %d of %d), %zu loot lists "
                 "of only food, drink and medicine (%d food and %d medicine entries in loot lists), %zu only boxes and "
                 "vendors use (of %zu they use; %zu kit out characters), %zu combat styles", g_armors.size(), light,
@@ -6193,9 +6068,7 @@ namespace game
                     value = t.original * balance->damageByPlayers;
                 else if (name == "fAVDCarryWeightsBase")
                     value = balance->carryWeightBase;
-                else if (name == "iLevelUpSkillPointsBase")
-                    value = static_cast<float>(balance->skillPointsBase);
-                else if (name.compare(0, 12, "iXPLevelKill") == 0)
+                else if (name.compare(0, 13, "iXPRewardKill") == 0)
                     value = std::round(t.original * balance->killXpMult);
             }
             char line[128];
@@ -6224,7 +6097,7 @@ namespace game
         for (const StyleWas& s : g_styles)
         {
             auto* style = reinterpret_cast<uint8_t*>(s.style);
-            bool usesCover = s.takeCover > 0;  // (creatures that never take cover are left as they are)
+            bool usesCover = s.takeCover > 0;
             *reinterpret_cast<float*>(style + layout::kStyleTakeCover) = balance && usesCover ?
                 (std::max)(s.takeCover, static_cast<float>(balance->takeCoverAtLeast)) : s.takeCover;
             *reinterpret_cast<float*>(style + layout::kStyleCoverRadius) = balance && usesCover ?
@@ -6240,6 +6113,17 @@ namespace game
         for (const SupplyList& l : g_boxLists)
             *(reinterpret_cast<uint8_t*>(l.list) + layout::kLevListChanceNone) =
                 balance ? coop::ScarceChanceNone(l.original, balance->boxLootKept) : l.original;
+        for (const AmmoValue& a : g_ammoValues)
+            *reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(a.ammo) + layout::kAmmoValue) =
+                balance ? coop::AmmoValue(a.original, *balance) : a.original;
+        for (const AmmoCount& c : g_ammoCounts)
+        {
+            int32_t count = balance ? coop::AmmoFound(c.original, *balance) : c.original;
+            if (c.wide)
+                *reinterpret_cast<int32_t*>(c.count) = count;
+            else
+                *reinterpret_cast<int16_t*>(c.count) = static_cast<int16_t>(count);
+        }
         for (const TunedEffect& e : g_tunedEffects)
         {
             if (e.magnitude < 0 || e.duration < 0)
@@ -6250,11 +6134,15 @@ namespace game
             EffectTrait(e.item, 0, magnitude);
             EffectTrait(e.item, 2, duration);
         }
-        LOG_INFO("Balance: %s (damage to players x%.2f, by players x%.2f, carry weight %.0f, Stimpak %d/s for %d s)",
+        SetLevelUpBalance(balance);
+        LOG_INFO("Balance: %s (damage to players x%.2f, by players x%.2f, carry weight %.0f, Stimpak %d/s for %d s, "
+            "skill points a level %d + half of Intelligence, kill XP x%.2f, ammo worth x%.1f and found x%.2f)",
             balance ? "co-op balanced" : "the game's own", balance ? balance->damageToPlayers : 1.0f,
             balance ? balance->damageByPlayers : 1.0f, balance ? balance->carryWeightBase : g_tuned[10].original,
             balance ? balance->stimpakPerSecond : g_tunedEffects[0].magnitude,
-            balance ? balance->stimpakSeconds : g_tunedEffects[0].duration);
+            balance ? balance->stimpakSeconds : g_tunedEffects[0].duration,
+            balance ? balance->skillPointsBase : coop::kGameSkillPointsBase, balance ? balance->killXpMult : 1.0f,
+            balance ? balance->ammoValueMult : 1.0f, balance ? balance->ammoFindKept : 1.0f);
         return true;
     }
 
@@ -6266,7 +6154,7 @@ namespace game
         if (!front || process != GetCurrentProcessId() || key <= 0 || key > 255)
             return false;
         UINT vk = MapVirtualKeyA(static_cast<UINT>(key), MAPVK_VSC_TO_VK_EX);
-        if (!vk)  // (keys past the main block: arrows and the like have the extended bit)
+        if (!vk)
             vk = MapVirtualKeyA(0xE000 | static_cast<UINT>(key), MAPVK_VSC_TO_VK_EX);
         return vk && (GetAsyncKeyState(static_cast<int>(vk)) & 0x8000) != 0;
     }
@@ -6470,7 +6358,7 @@ namespace game
             TESObjectREFR* ref = LookupRef(p.refId);
             float lost = ref ? p.healthAtHit - Health(ref) : 0;
             LOG_DEBUG("%08X hit %08X for %.1f", p.attackerId, p.refId, lost);
-            if (lost > 0)  // misses and blocked hits cost nothing
+            if (lost > 0)
                 hits.push_back({p.refId, p.attackerId, lost});
         }
         g_myHits.clear();
@@ -6490,8 +6378,6 @@ namespace game
 
     std::vector<TESObjectREFR*> MapMarkers()
     {
-        // As JIP's GetLoadedTypeArray 301 walks them (every world space's persistent cell), but a world space with no
-        // cell is skipped: JIP's read 0xAC from it and crashed (2026-10-30 lab, jip_nvse.dll+439A3).
         std::vector<TESObjectREFR*> out;
         const void* data = *reinterpret_cast<const void* const*>(addr::kDataHandler);
         if (!data)
@@ -6544,7 +6430,6 @@ namespace game
     {
         if (g_teleporter || !g_compiled || !Player())
             return g_teleporter;
-        // A copy of a stimpak that isn't kept in saves (given again each session), with no effects.
         TESForm* original = LookupForm(ids::kStimpak);
         NVSEArrayVarInterface::Element result;
         if (!original || original->typeID != kFormType_AlchemyItem ||
@@ -6555,7 +6440,6 @@ namespace game
             return nullptr;
         auto* item = static_cast<AlchemyItem*>(copy);
         SetName(item->fullName.name, "Co-op Teleporter");
-        // (The copy's first list entry is its own, the rest the stimpak's: cutting the start leaves the stimpak's.)
         item->effects.list.m_listHead.data = nullptr;
         item->effects.list.m_listHead.next = nullptr;
         item->value = 0;
@@ -6576,9 +6460,6 @@ namespace game
 
     void SetRefMapMarker(TESObjectREFR* ref, bool on)
     {
-        // JIP's AddRefMapMarker / RemoveRefMapMarker, run directly (neither reads parameters; removing only compares
-        // the pointer with its list's, so it's safe for a character the game already deleted). JIP clears its list
-        // when a save loads.
         static const CommandInfo* add = g_cmdTable ? g_cmdTable->GetByName("AddRefMapMarker") : nullptr;
         static const CommandInfo* remove = g_cmdTable ? g_cmdTable->GetByName("RemoveRefMapMarker") : nullptr;
         static bool warned = false;
@@ -6625,13 +6506,10 @@ namespace game
 
     void PlayAnimFile(TESObjectREFR* actor, const std::string& path)
     {
-        // kNVSE wants the path under Meshes, without it (the game names a furniture's animation with it).
-        // kNVSE's PlayAnimationPath, as a console line on the actor (in a compiled function with a string variable it
-        // never played: lab 2026-10-30). The path is checked (net::IsAnimPath: no quotes) before it gets here.
         std::string file = _strnicmp(path.c_str(), "meshes\\", 7) == 0 ? path.substr(7) : path;
         if (!g_console || !actor || file.empty() || file.find('"') != std::string::npos)
             return;
-        std::string line = "PlayAnimationPath \"" + file + "\" 0";  // (third person)
+        std::string line = "PlayAnimationPath \"" + file + "\" 0";
         if (g_console->version >= 3 && g_console->RunScriptLine2)
             g_console->RunScriptLine2(line.c_str(), actor, true);
     }
@@ -6644,7 +6522,7 @@ namespace game
 
     void ShowReviveBar(const std::string& text)
     {
-        static std::string s_shown;  // what it shows now ("" hidden)
+        static std::string s_shown;
         if (text == s_shown || !g_reviveBar || !Player())
             return;
         MakeChatHud();
@@ -6659,11 +6537,8 @@ namespace game
             g_scripts->CallFunctionAlt(g_speedMult, actor, 1, static_cast<uint32_t>(mult));
     }
 
-
     void SetAnimOverride(TESObjectREFR* actor, const std::string& path, bool on)
     {
-        // kNVSE's SetActorAnimationPath on that actor (third person), as a console line (see PlayAnimFile); the path
-        // is checked (net::IsAnimPath: no quotes). kNVSE wants it under Meshes, without it.
         std::string file = _strnicmp(path.c_str(), "meshes\\", 7) == 0 ? path.substr(7) : path;
         if (!g_console || !actor || file.empty() || file.find('"') != std::string::npos)
             return;

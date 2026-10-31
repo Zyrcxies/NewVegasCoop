@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "speech.h"
 
 #include "log.h"
@@ -16,12 +18,12 @@
 
 namespace
 {
-    constexpr size_t kMaxWaiting = 6;     // lines waiting to be said
-    constexpr size_t kMaxPlaying = 8;     // lines playing at once
-    constexpr DWORD kRate = 22050;        // what the voices say into: 22 kHz, 16-bit, mono
+    constexpr size_t kMaxWaiting = 6;
+    constexpr size_t kMaxPlaying = 8;
+    constexpr DWORD kRate = 22050;
 
     template <typename T>
-    struct Com  // (releases a COM object)
+    struct Com
     {
         T* p = nullptr;
         ~Com() { if (p) p->Release(); }
@@ -29,7 +31,6 @@ namespace
         T** operator&() { return &p; }
     };
 
-    // A line playing: its own wave out (Windows mixes them), stereo for the side it's on.
     struct Playing
     {
         HWAVEOUT out = nullptr;
@@ -37,7 +38,6 @@ namespace
         std::vector<int16_t> samples;
     };
 
-    // Says `text` into memory as 16-bit mono samples.
     bool Render(ISpVoice* voice, ISpObjectToken* token, int pitch, int speed, const std::string& text,
         std::vector<int16_t>& out)
     {
@@ -52,7 +52,6 @@ namespace
         if (token)
             voice->SetVoice(token);
         voice->SetRate(speed);
-        // (The text is printable with no '<', '>' or '&' (coop::CleanChat): nothing in it reads as SAPI's markup.)
         std::wstring xml = L"<pitch absmiddle=\"" + std::to_wstring(pitch) + L"\">";
         for (char c : text)
             if (c != '<' && c != '>' && c != '&')
@@ -68,7 +67,7 @@ namespace
             return false;
         size_t bytes = static_cast<size_t>(stat.cbSize.QuadPart);
         if (bytes > 30u * kRate * 2)
-            bytes = 30u * kRate * 2;  // (30 s at most)
+            bytes = 30u * kRate * 2;
         const auto* data = static_cast<const int16_t*>(GlobalLock(global));
         if (!data)
             return false;
@@ -79,7 +78,6 @@ namespace
 
     bool Play(const std::vector<int16_t>& mono, float volume, float pan, Playing& p)
     {
-        // Equal-power panning.
         float angle = (pan + 1) * 0.785398f;
         float left = volume * std::cos(angle), right = volume * std::sin(angle);
         p.samples.resize(mono.size() * 2);
@@ -120,7 +118,7 @@ Speech::~Speech()
     }
     m_wake.notify_all();
     if (m_thread.joinable())
-        m_thread.detach();  // (the game is closing: its threads may be gone already)
+        m_thread.detach();
 }
 
 void Speech::Say(const std::string& text, uint8_t who, const coop::VoiceStyle& style, float volume, float pan)
@@ -147,7 +145,7 @@ float Speech::Level(uint8_t who)
         if (s.who != who)
             continue;
         size_t at = static_cast<size_t>(GetTickCount() - s.start) * kRate / 1000;
-        size_t window = kRate / 25;  // (40 ms)
+        size_t window = kRate / 25;
         if (at >= s.samples.size())
             return 0;
         size_t end = at + window < s.samples.size() ? at + window : s.samples.size();
@@ -166,7 +164,7 @@ void Speech::Run()
     {
         Com<ISpVoice> voice;
         Com<ISpObjectTokenCategory> category;
-        std::vector<ISpObjectToken*> voices[2];  // male, female (Windows' voices say which they are)
+        std::vector<ISpObjectToken*> voices[2];
         if (FAILED(CoCreateInstance(CLSID_SpVoice, nullptr, CLSCTX_ALL, IID_ISpVoice, reinterpret_cast<void**>(&voice))))
         {
             LOG_ERROR("Speech: Windows' text-to-speech isn't there; chat lines aren't read out loud");
@@ -207,7 +205,6 @@ void Speech::Run()
                     m_lines.pop_front();
                 }
                 lock.unlock();
-                // Lines done playing are let go.
                 for (size_t i = 0; i < playing.size();)
                     if (playing[i]->header.dwFlags & WHDR_DONE)
                     {
@@ -220,9 +217,8 @@ void Speech::Run()
                     continue;
             }
             if (playing.size() >= kMaxPlaying)
-                continue;  // (too much at once: this one isn't said)
+                continue;
             std::vector<int16_t> mono;
-            // Their kind of voice (or the other kind, if this PC has none of theirs).
             const coop::VoiceStyle& style = line.style;
             const std::vector<ISpObjectToken*>& kind = !voices[style.voice].empty() ? voices[style.voice] : voices[!style.voice];
             ISpObjectToken* token = kind.empty() ? nullptr : kind[style.variant % kind.size()];
@@ -234,7 +230,6 @@ void Speech::Run()
             {
                 playing.push_back(std::move(p));
                 std::lock_guard<std::mutex> lock(m_mutex);
-                // (Lines done a while ago are let go; one per speaker kept: the newest.)
                 DWORD now = GetTickCount();
                 for (size_t i = 0; i < m_sounding.size();)
                     if (m_sounding[i].who == line.who ||

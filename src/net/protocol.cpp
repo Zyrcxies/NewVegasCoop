@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "net/protocol.h"
 
 #include <algorithm>
@@ -6,7 +8,6 @@
 
 namespace net
 {
-    // Both ends are 32-bit x86 Windows, so values go out little-endian as they are in memory.
 
     void Writer::U16(uint16_t v)
     {
@@ -919,7 +920,6 @@ namespace net
         std::string lower;
         for (char c : path)
         {
-            // (Letters, digits, spaces and _ - . ( ) and backslashes only: it goes into a console line.)
             if (c == 0 || (!std::isalnum(static_cast<unsigned char>(c)) && !std::strchr(" _-.()\\", c)))
                 return false;
             lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -1541,7 +1541,6 @@ namespace net
         std::string end = name.substr(name.size() - 4);
         if (ext ? _stricmp(end.c_str(), ext) != 0 : _stricmp(end.c_str(), ".esm") != 0 && _stricmp(end.c_str(), ".esp") != 0)
             return false;
-        // Windows' device names (CON, NUL, COM1...) mean a device whatever the extension.
         std::string stem = name.substr(0, name.find('.'));
         while (!stem.empty() && stem.back() == ' ')
             stem.pop_back();

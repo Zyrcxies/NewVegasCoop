@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "dev/commands.h"
 
 #include "dev/inspect_text.h"
@@ -30,13 +32,11 @@ namespace dev
         NVSEScriptInterface* g_scripts = nullptr;
         game::Inspector* g_inspector = nullptr;
         game::Mirror* g_mirror = nullptr;
-        uint32_t g_dummy = 0;  // ref id of the lab dummy from "coop spawn"
-        bool g_pitching = false;  // "coop pitch": the dummy holds this up/down angle (degrees) every frame
+        uint32_t g_dummy = 0;
+        bool g_pitching = false;
         float g_pitch = 0;
         uint32_t g_pickedDoor = 0;
-        uint32_t g_pickedQuest = 0;  // "coop questpick K"
-        // coop watchface: a hardware write watch (debug register DR0) on the nearest NPC's lip clock, logging which
-        // code writes it and from where (lab, step 7.3). Lab only.
+        uint32_t g_pickedQuest = 0;
         struct WatchHit { uint32_t eip; uint32_t stack[16]; double ms; float before, after; };
         const float* g_watchFloat = nullptr;
         WatchHit g_hits[30];
@@ -61,12 +61,11 @@ namespace dev
                 const uint32_t* sp = reinterpret_cast<const uint32_t*>(e->ContextRecord->Esp);
                 for (int i = 0; i < 16; ++i)
                     g_hits[n].stack[i] = 0;
-                // The return addresses near the top of the stack (code in the game: 0x401000-0x1000000).
                 int found = 0;
                 for (int i = 0; i < 4096 && found < 16; ++i)
                     if (sp[i] > 0x401000 && sp[i] < 0x1000000)
                     {
-                        bool seen = false;  // (recursion repeats the same addresses: once is enough)
+                        bool seen = false;
                         for (int k = 0; k < found; ++k)
                             seen |= g_hits[n].stack[k] == sp[i];
                         if (!seen)
@@ -75,7 +74,7 @@ namespace dev
             }
             e->ContextRecord->Dr6 = 0;
             if (n >= 29)
-                e->ContextRecord->Dr7 = 0;  // enough: off
+                e->ContextRecord->Dr7 = 0;
             return EXCEPTION_CONTINUE_EXECUTION;
         }
 
@@ -89,7 +88,7 @@ namespace dev
             c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
             GetThreadContext(t, &c);
             c.Dr0 = g_watchAddress;
-            c.Dr7 = (g_watchAddress ? 1 : 0) | (1u << 16) | (3u << 18);  // DR0 on, break on write, 4 bytes
+            c.Dr7 = (g_watchAddress ? 1 : 0) | (1u << 16) | (3u << 18);
             if (!g_watchAddress)
                 c.Dr7 = 0;
             SetThreadContext(t, &c);
@@ -98,11 +97,10 @@ namespace dev
             return 0;
         }
 
-        float g_faceWas[256] = {};  // coop face: the last read of the nearest NPC's face animation data
-        uint32_t g_faceWasAt = 0;  // "coop nopause 1": menus don't pause even outside co-op (lab, step 7.3)
-        void* g_detachedScript = nullptr;  // "coop questscript 0": the picked quest's script, to put back  // "coop doorpick K": the door "coop door N" changes when none is selected
+        float g_faceWas[256] = {};
+        uint32_t g_faceWasAt = 0;
+        void* g_detachedScript = nullptr;
 
-        // In the console and the log.
         void Say(const char* fmt, ...)
         {
             char buf[512];
@@ -114,7 +112,6 @@ namespace dev
             game::ConsolePrint(buf);
         }
 
-        // The actor a command is about: the one clicked in the console, or else the one being inspected.
         TESObjectREFR* Target(TESObjectREFR* selected)
         {
             if (selected)
@@ -122,7 +119,7 @@ namespace dev
             return g_inspector->Watching() ? game::LookupRef(g_inspector->Watching()) : nullptr;
         }
 
-        bool g_spawnTestMoves = true;  // coop spawntest: move each at once (way 0)
+        bool g_spawnTestMoves = true;
 
         void Help()
         {
@@ -156,19 +153,19 @@ namespace dev
                 "base)");
             Say("coop stand [N]: move the selected actor out of its seat, then way N out of its animation (0-3; "
                 "11-13 without the move)");
+            Say("coop ganger: a Powder Ganger next to you becomes the lab dummy (it can die)");
             Say("coop arm N: the selected, mirrored or lab dummy actor holds a harmless copy of weapon N (decimal "
                 "form id), facing you; coop throw: it attacks with it; coop letgo: its throw leaves its hand");
         }
 
-        uint32_t g_armed = 0;       // coop arm (step 8.8 lab)
-    game::Spoken g_lastSpoken;  // coop spoken / sayagain (lab)
+        uint32_t g_armed = 0;
+    game::Spoken g_lastSpoken;
     game::Sound g_labSound;
-    uint32_t g_pendingSayer = 0;  // coop sayagain: who says it next frame
+    uint32_t g_pendingSayer = 0;
     uint32_t g_pendingSayerWas = 0;
     int g_pendingResponse = 0;
     std::string g_lastSpokenText;
 
-    // Lab: a 32-bit value read from game memory, or 0xDEAD0BAD if it can't be read.
     uint32_t Peek(uintptr_t at)
     {
         __try
@@ -187,8 +184,6 @@ namespace dev
             coop::Pose here;
             if (_strnicmp(action, "goto:", 5) == 0)
             {
-                // Lab: one jump to a spot in this worldspace, the game's MoveTo loading the ground there (setpos one
-                // axis at a time left the players falling from the sky in between: Alex, 2026-10-19).
                 if (sscanf_s(action + 5, "%f:%f:%f", &gx, &gy, &gz) != 3 || !game::GetPose(game::Player(), here))
                     return Say("coop goto:X:Y:Z (in this worldspace)");
                 here.x = gx;
@@ -228,6 +223,17 @@ namespace dev
                     Say("Lab dummy %08X is next to you, and inspected", g_dummy);
                 else
                     Say("Couldn't make a lab dummy");
+            }
+            else if (_stricmp(action, "ganger") == 0)
+            {
+                if (TESObjectREFR* old = game::LookupRef(g_dummy))
+                    game::Remove(old);
+                TESObjectREFR* ganger = game::PlaceActor(game::ids::kLvlPowderGanger);
+                g_dummy = ganger ? game::RefId(ganger) : 0;
+                if (ganger)
+                    Say("Lab dummy %08X: a Powder Ganger next to you", g_dummy);
+                else
+                    Say("Couldn't place a Powder Ganger");
             }
             else if (_stricmp(action, "remove") == 0)
             {
@@ -288,14 +294,13 @@ namespace dev
                     Say("Select an NPC, or start coop mirror first");
                     return;
                 }
-                bool on = game::LifeState(who) != 5;  // 5: restrained (puppet lab, Oct 2026)
+                bool on = game::LifeState(who) != 5;
                 game::SetRestrained(who, on);
                 Say("%08X %s (life state now %d)", game::RefId(who), on ? "restrained: no AI routine" :
                     "free: AI routine back on", game::LifeState(who));
             }
             else if (_stricmp(action, "reload") == 0)
             {
-                // Step 5.3 lab: can we make an NPC reload when the host's does? (game's Reload, addresses.h)
                 TESObjectREFR* who = selected ? selected : game::LookupRef(g_mirror->Copier());
                 if (!game::IsActor(who) || who == game::Player())
                 {
@@ -322,9 +327,6 @@ namespace dev
             }
             else if (_stricmp(action, "stand") == 0)
             {
-                // Step 5.3 lab: a copy moved out of its chair kept its sitting animation. N 0-3: move it out, then
-                // way N out of the animation (0 none, 1 StopIdle, 2 PlayGroupAlt Idle, 3 ForceStopIdle); 11-13:
-                // only the way, no move.
                 TESObjectREFR* who = selected ? selected : game::LookupRef(g_mirror->Copier());
                 if (!game::IsActor(who) || who == game::Player())
                 {
@@ -350,8 +352,6 @@ namespace dev
             }
             else if (_stricmp(action, "copyof") == 0)
             {
-                // Step 5.4 lab: does placing a made-while-playing actor's original form give the same one?
-                // N 1: the form it was levelled from (+0x0C); 2: the other (+0x10).
                 if (!game::IsActor(selected) || selected == game::Player())
                 {
                     Say("Select an NPC or creature first");
@@ -360,7 +360,7 @@ namespace dev
                 game::BaseInfo b = game::DescribeBase(selected);
                 uint32_t from = !hasNumber || number == 1 ? b.leveledBase : number == 2 ? b.leveledActor : 0;
                 if (!from)
-                    from = b.base;  // not levelled: its own base
+                    from = b.base;
                 TESObjectREFR* made = game::PlaceActor(from);
                 if (!made)
                 {
@@ -374,9 +374,6 @@ namespace dev
             }
             else if (_stricmp(action, "spawntest") == 0)
             {
-                // Step 5.4 lab: friends' games crashed (body-loading thread) while making several copies quickly.
-                // N Powder Gangers at once, next to you; way 0: each moved 600 units away at once (as copies were
-                // made), 1: left where they appear.
                 int count = hasNumber && number > 0 && number <= 10 ? number : 4;
                 coop::Pose me;
                 game::GetPose(game::Player(), me);
@@ -448,7 +445,6 @@ namespace dev
                 bool lock = _stricmp(action, "lock") == 0;
                 if (lock || _stricmp(action, "unlock") == 0)
                 {
-                    // Lab: as a lockpick (or a key) would, with the game's Lock / Unlock on it.
                     if (!hasNumber || number < 0 || static_cast<size_t>(number) >= boxes.size())
                         return Say("coop lock|unlock K: K is a container's number from coop boxes");
                     game::SetDoorLocked(boxes[number], lock, 50);
@@ -486,9 +482,9 @@ namespace dev
                         return Say("coop mineuse|minego K: K is a mine's number from coop mines");
                     TESObjectREFR* mine = mines[number];
                     if (_stricmp(action, "minego") == 0)
-                        game::MoveOnto(player, mine);  // (it goes off for us: the game's own check)
+                        game::MoveOnto(player, mine);
                     else
-                        game::Activate(mine);  // as the player would: armed, it's disarmed; disarmed, picked up
+                        game::Activate(mine);
                     return Say("%s mine %08X", _stricmp(action, "minego") == 0 ? "Stepped onto" : "Used",
                         game::RefId(mine));
                 }
@@ -514,8 +510,6 @@ namespace dev
                 }
                 if (_stricmp(action, "boxgun") == 0)
                 {
-                    // Item kinds lab: a 9mm Pistol at 47% condition with both its mods (extended magazine, scope).
-                    // ("coop boxgun -1": one taken out.)
                     net::ItemCount gun{game::ids::k9mmPistolWeapon, hasNumber && number ? number : 1, 47, 3};
                     game::ChangeItem(box, gun);
                     game::RefreshItemList();
@@ -547,7 +541,6 @@ namespace dev
             }
             else if (_stricmp(action, "where") == 0)
             {
-                // Step 8.9 lab: where a reference is (crates and tumbleweeds aren't in coop items), and its 3D.
                 TESObjectREFR* ref = hasNumber ? game::LookupRef(static_cast<uint32_t>(number)) : selected;
                 if (!ref)
                     return Say("coop where N: a reference's id, decimal (or select one)");
@@ -561,19 +554,16 @@ namespace dev
             }
             else if (_stricmp(action, "stopsay") == 0)
             {
-                // Radio lab: stop what reference N (decimal) is saying (a radio station's song).
                 TESObjectREFR* ref = hasNumber ? game::LookupRef(static_cast<uint32_t>(number)) : selected;
                 Say("Stopping %08X: %s", game::RefId(ref), game::StopSpeaking(ref) ? "it was talking" : "nothing kept");
             }
             else if (_stricmp(action, "radio") == 0)
             {
-                // Radio lab: the Pip-Boy's radio on, tuned to station N (decimal).
                 TESObjectREFR* ref = hasNumber ? game::LookupRef(static_cast<uint32_t>(number)) : selected;
                 Say("Pip-Boy radio %s %08X", game::TunePipboyRadio(ref) ? "tuned to" : "can't tune to", game::RefId(ref));
             }
             else if (_stricmp(action, "activate") == 0)
             {
-                // Radio lab: our player activates reference N (decimal id): a radio switches on or off.
                 TESObjectREFR* ref = hasNumber ? game::LookupRef(static_cast<uint32_t>(number)) : selected;
                 if (!ref)
                     return Say("coop activate N: a reference's id, decimal (or select one)");
@@ -582,7 +572,6 @@ namespace dev
             }
             else if (_stricmp(action, "party") == 0)
             {
-                // Companions lab: who's following us (teammates not told to wait).
                 std::string list;
                 for (uint32_t id : game::Followers())
                     list += std::string(" ") + game::Name(game::LookupRef(id)) + " (" + std::to_string(id) + ")";
@@ -590,7 +579,6 @@ namespace dev
             }
             else if (_stricmp(action, "hide") == 0 || _stricmp(action, "show") == 0)
             {
-                // Lab (desync detector): switch reference N (decimal id) off or on in this game only.
                 TESObjectREFR* ref = hasNumber ? game::LookupRef(static_cast<uint32_t>(number)) : selected;
                 if (!ref)
                     return Say("coop hide N / coop show N: a reference's id, decimal (or select one)");
@@ -640,7 +628,6 @@ namespace dev
                         static_cast<unsigned>(i), game::RefId(items[i]), w.base, w.count, w.flags,
                         w.inCell ? "in a cell" : "NO CELL", w.x, w.y, w.z, std::sqrt(nearest[n].first),
                         items[i]->rotX * 57.29578f, items[i]->rotY * 57.29578f, items[i]->rotZ * 57.29578f);
-                    // Step 8.9 lab: its 3D, where physics has it (does the reference's own place follow?).
                     if (const auto* node = reinterpret_cast<const uint8_t*>(items[i]->GetNiNode()))
                     {
                         const auto* m = reinterpret_cast<const float*>(node + game::layout::kNodeWorldRotate);
@@ -655,7 +642,7 @@ namespace dev
                 std::vector<game::QuestInfo> quests;
                 LARGE_INTEGER t0, t1, freq;
                 QueryPerformanceCounter(&t0);
-                game::ReadQuests(quests, true);  // all of them: numbers stay put when one starts
+                game::ReadQuests(quests, true);
                 QueryPerformanceCounter(&t1);
                 QueryPerformanceFrequency(&freq);
                 if (_stricmp(action, "questpick") == 0)
@@ -771,7 +758,6 @@ namespace dev
             }
             else if (_stricmp(action, "targets") == 0)
             {
-                // Who each character near us that's fighting is going for (multi-target combat lab).
                 std::vector<TESObjectREFR*> actors;
                 game::NearbyActors(actors);
                 int fighting = 0;
@@ -786,11 +772,10 @@ namespace dev
             }
             else if (_stricmp(action, "pile") == 0)
             {
-                // Lab: an energy weapon's kill on the nearest Powder Ganger (1 goo, 2 ash, 3 alien ash).
                 std::vector<TESObjectREFR*> actors;
                 game::NearbyActors(actors);
                 TESObjectREFR* nearest = nullptr;
-                for (bool living : {true, false})  // (a living one first)
+                for (bool living : {true, false})
                 {
                     for (TESObjectREFR* a : actors)
                         if (a != game::Player() && std::strstr(game::Name(a), "Powder Ganger") &&
@@ -810,7 +795,6 @@ namespace dev
             }
             else if (_stricmp(action, "fight") == 0)
             {
-                // Step 8.8 lab: nearby Powder Gangers attack us (they throw dynamite).
                 std::vector<TESObjectREFR*> actors;
                 game::NearbyActors(actors);
                 int started = 0;
@@ -820,7 +804,6 @@ namespace dev
                         char line[64];
                         if (hasNumber && number == 1)
                         {
-                            // Only dynamite (WeapNVDynamite 000BA0F3): every attack a throw.
                             std::snprintf(line, sizeof(line), "%08X.RemoveAllItems", game::RefId(a));
                             game::RunConsoleLine(line);
                             std::snprintf(line, sizeof(line), "%08X.AddItem 000BA0F3 20", game::RefId(a));
@@ -828,19 +811,26 @@ namespace dev
                             std::snprintf(line, sizeof(line), "%08X.EquipItem 000BA0F3", game::RefId(a));
                             game::RunConsoleLine(line);
                         }
+                        else if (hasNumber && number == 2)
+                        {
+                            std::snprintf(line, sizeof(line), "%08X.AddItem 00004328 1", game::RefId(a));
+                            game::RunConsoleLine(line);
+                            std::snprintf(line, sizeof(line), "%08X.EquipItem 00004328 1", game::RefId(a));
+                            game::RunConsoleLine(line);
+                        }
                         std::snprintf(line, sizeof(line), "%08X.StartCombat player", game::RefId(a));
                         started += game::RunConsoleLine(line) ? 1 : 0;
                     }
-                Say("%d Powder Gangers attack you%s", started, hasNumber && number == 1 ? ", with dynamite only" : "");
+                Say("%d Powder Gangers attack you%s", started, !hasNumber ? "" : number == 1 ? ", with dynamite only" :
+                    number == 2 ? ", with tire irons only" : "");
             }
             else if (_stricmp(action, "draw") == 0)
             {
-                game::SetWeaponOut(game::Player(), !hasNumber || number != 0);  // lab: ours out (coop draw 0: away)
+                game::SetWeaponOut(game::Player(), !hasNumber || number != 0);
                 Say("Our weapon %s", !hasNumber || number != 0 ? "out" : "away");
             }
             else if (_stricmp(action, "lookat") == 0)
             {
-                // Lab: we turn to face the selected, mirrored or lab dummy actor (to watch it).
                 TESObjectREFR* who = selected ? selected : game::LookupRef(g_mirror->Copier());
                 if (!who)
                     who = game::LookupRef(g_dummy);
@@ -852,8 +842,6 @@ namespace dev
             }
             else if (_stricmp(action, "arm") == 0 || _stricmp(action, "throw") == 0 || _stricmp(action, "letgo") == 0)
             {
-                // Step 8.8 lab: the selected, mirrored or lab dummy actor arms itself with the harmless copy of weapon
-                // N (decimal form id) facing us, then winds up (throw: a gun or launcher fires) and lets go (letgo).
                 TESObjectREFR* who = selected ? selected : game::LookupRef(g_mirror->Copier());
                 if (!who)
                     who = game::LookupRef(g_dummy);
@@ -883,9 +871,6 @@ namespace dev
             }
             else if (_stricmp(action, "face") == 0)
             {
-                // The nearest NPC's face animation data (Actor +0x68 process, +0x178 BSFaceGenAnimationData: JIP
-                // GameObjects.h / GameProcess.h), read as floats: the ones that changed since the last read, and by how
-                // much a second (lab, step 7.3: which one is the lip-sync clock?).
                 std::vector<TESObjectREFR*> actors;
                 game::NearbyActors(actors);
                 coop::Pose me, at;
@@ -989,7 +974,6 @@ namespace dev
             }
             else if (_stricmp(action, "open") == 0)
             {
-                // Step 7.5 lab: the container our screen shows (a box, a body, or while trading the merchant's).
                 TESObjectREFR* open = game::OpenContainer();
                 std::vector<game::Item> items;
                 bool read = open && game::Contents(open, items);
@@ -1002,7 +986,6 @@ namespace dev
             }
             else if (_stricmp(action, "spoken") == 0)
             {
-                // Step 7.4 lab: what the one we're talking to is saying now.
                 game::Spoken s = game::SpokenNow();
                 if (s.id)
                 {
@@ -1019,7 +1002,6 @@ namespace dev
             }
             else if (_stricmp(action, "sayagain") == 0)
             {
-                // Step 7.4 lab: the nearest NPC says the line coop spoken last saw (response N if given).
                 std::vector<TESObjectREFR*> actors;
                 game::NearbyActors(actors);
                 coop::Pose me, at;
@@ -1035,15 +1017,12 @@ namespace dev
                     }
                 if (!speaker || !g_lastSpoken.info)
                     return Say("coop spoken in a conversation first, then near someone: coop sayagain [response]");
-                // (Said next frame, outside the console: as in co-op.)
                 g_pendingSayer = game::RefId(speaker);
                 g_pendingResponse = hasNumber ? number : 0;
                 Say("%s will say line %08X next frame", game::Name(speaker), g_lastSpoken.info);
             }
             else if (_stricmp(action, "pitch") == 0)
             {
-                // Lab (step 8.7): the dummy gets a weapon, draws it and holds an up/down angle of N degrees (its
-                // rotX, written every frame). "coop pitch" alone stops. Does its aim follow?
                 TESObjectREFR* dummy = game::LookupRef(g_dummy);
                 if (!dummy)
                     Say("No dummy (coop spawn first)");
@@ -1055,17 +1034,16 @@ namespace dev
                 else
                 {
                     if (!g_pitching)
-                        game::AddAndEquip(dummy, 0x001735E3);  // the laptop player's weapon in a lab log
+                        game::AddAndEquip(dummy, 0x001735E3);
                     coop::Pose at;
                     if (game::GetPose(game::Player(), at))
                     {
-                        // 200 units in front of the player (heading: radians clockwise from north), facing them.
                         at.x += 200 * std::sin(at.heading);
                         at.y += 200 * std::cos(at.heading);
                         at.heading += 3.14159265f;
                         game::Move(dummy, at);
                     }
-                    game::SetAlert(dummy, true);  // or its AI puts the weapon away again
+                    game::SetAlert(dummy, true);
                     game::SetWeaponOut(dummy, true);
                     g_pitch = static_cast<float>(number);
                     g_pitching = true;
@@ -1074,7 +1052,6 @@ namespace dev
             }
             else if (_stricmp(action, "pitchshot") == 0)
             {
-                // Lab (step 8.7): the pitching dummy shoots once; its weapon animations are logged before and after.
                 TESObjectREFR* dummy = game::LookupRef(g_dummy);
                 if (!dummy)
                 {
@@ -1094,9 +1071,6 @@ namespace dev
             }
             else if (_stricmp(action, "waittest") == 0)
             {
-                // Lab (step 8.2): starts a wait of N hours as the sleep/wait menu's Wait button does (Ghidra 0x7C0220:
-                // it sets the player's hours to wait (+0x654, to the hours + 1) and sleeping (+0x658) through 0x5C1A00),
-                // without the menu. Does the game wait?
                 auto* player = reinterpret_cast<uint8_t*>(game::Player());
                 int hours = hasNumber && number > 0 && number <= 24 ? number : 2;
                 *reinterpret_cast<int32_t*>(player + 0x654) = hours + 1;
@@ -1105,7 +1079,6 @@ namespace dev
             }
             else if (_stricmp(action, "sleepwait") == 0)
             {
-                // Lab (step 8.2): presses the sleep/wait menu's Wait button for N hours (negative: Sleep), as a player.
                 int hours = hasNumber ? number : 2;
                 bool sleep = hours < 0;
                 hours = hours < 0 ? -hours : hours;
@@ -1114,13 +1087,10 @@ namespace dev
             }
             else if (_stricmp(action, "speedwatch") == 0)
             {
-                // Lab: logs each change to the game's speed and who asked (the VATS slow motion hunt).
                 Say(game::WatchSpeedChanges() ? "Speed changes are logged now" : "Couldn't watch speed changes");
             }
             else if (_stricmp(action, "hooksof") == 0)
             {
-                // Lab: every call or jump in the game's code that goes into one of these plugins (by number: 1
-                // FloatingSubtitlesNVSE, 2 itr-nvse, 3 johnnyguitar, 4 jip_nvse, 5 RealTimeMenus), logged.
                 const wchar_t* names[] = {L"", L"FloatingSubtitlesNVSE.dll", L"itr-nvse.dll", L"johnnyguitar.dll",
                     L"jip_nvse.dll", L"RealTimeMenus.dll"};
                 int which = hasNumber && number >= 1 && number <= 5 ? number : 1;
@@ -1149,7 +1119,6 @@ namespace dev
             }
             else if (_stricmp(action, "notify") == 0)
             {
-                // Lab: our corner message (1: the timed one).
                 if (hasNumber && number == 1)
                     game::Notify("Co-op lab: a timed message", 3.0f);
                 else
@@ -1158,7 +1127,6 @@ namespace dev
             }
             else if (_stricmp(action, "lastline") == 0)
             {
-                // Step 7.4 lab: coop sayagain's line set by hand (a greeting's id in decimal; topic GREETING).
                 g_lastSpoken = game::Spoken{};
                 g_lastSpoken.info = hasNumber ? static_cast<uint32_t>(number) : 0;
                 g_lastSpoken.topic = 0xC8;
@@ -1178,7 +1146,6 @@ namespace dev
             }
             else if (_stricmp(action, "dialogmem") == 0)
             {
-                // Step 7.4 lab: the conversation screen's memory around what's being said (read safely).
                 uint32_t menu = Peek(game::addr::kDialogMenu);
                 std::string out;
                 char b[64];
@@ -1215,7 +1182,6 @@ namespace dev
                     memcpy(said + i, &v, (sizeof(said) - 1 - i) < 4 ? sizeof(said) - 1 - i : 4);
                 }
                 Say("text: %s", said);
-                // Every response of the topic (its list at +0x0C: item, next).
                 for (uint32_t n = topic + 0x0C, i = 0; n && n != 0xDEAD0BAD && i < 8; n = Peek(n + 4), ++i)
                 {
                     uint32_t r = Peek(n);
@@ -1233,7 +1199,6 @@ namespace dev
             }
             else if (_stricmp(action, "subtitle") == 0)
             {
-                // Step 7.4 lab: a test subtitle from the nearest NPC (or the one we're talking to).
                 std::vector<TESObjectREFR*> actors;
                 game::NearbyActors(actors);
                 coop::Pose me, at;
@@ -1254,8 +1219,6 @@ namespace dev
             }
             else if (_stricmp(action, "screenlines") == 0)
             {
-                // Step 7.4 lab: every dialogue line in FalloutNV.esm whose script opens a screen (logged), and how
-                // many scripts read as whole statements.
                 int lines = 0, scripts = 0, whole = 0, screens = 0;
                 for (uint32_t id = 1; id < 0x01000000; ++id)
                 {
@@ -1285,8 +1248,6 @@ namespace dev
             }
             else if (_stricmp(action, "friendline") == 0)
             {
-                // Step 7.4 lab: run a dialogue line (form id in decimal; negative: its end script) as if friend 1
-                // said it, with the one we're talking to (or the nearest) saying it.
                 if (!hasNumber || number == 0)
                     return Say("coop friendline <line id in decimal, negative for its end script>");
                 TESObjectREFR* speaker = game::DialoguePartner();
@@ -1334,7 +1295,7 @@ namespace dev
                     return Say("No one near you");
                 if (_stricmp(action, "talk") == 0)
                 {
-                    game::Activate(nearest);  // as if our player pressed E on them
+                    game::Activate(nearest);
                     Say("You start a conversation with %s (%08X)", game::Name(nearest), game::RefId(nearest));
                     return;
                 }
@@ -1395,7 +1356,6 @@ namespace dev
                     Say("  %08X %s: %.0f units away, health %.0f / %.0f, life state %d%s", game::RefId(a),
                         game::Name(a), distance, game::Health(a), game::MaxHealth(a), game::LifeState(a),
                         (game::RefId(a) >> 24) == 0xFF ? " (made while playing)" : "");
-                    // (Step 5.4 lab: what a friend's game would need to make the same one.)
                     game::BaseInfo b = game::DescribeBase(a);
                     if (b.leveledBase || b.leveledActor)
                         Say("    base %08X (type %u), levelled from %08X (type %u), actor base %08X (type %u)", b.base,

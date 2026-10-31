@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "coop/coop.h"
 
 #include "coop/clock.h"
@@ -17,7 +19,6 @@ namespace coop
 
     bool Coop::Host(uint16_t port, const std::string& myName)
     {
-        // A couple of spare connection slots so extra joiners get a "game is full" message.
         if (!m_enet.StartHost(port, kMaxFriends + 2))
             return false;
         m_net = &m_enet;
@@ -38,7 +39,6 @@ namespace coop
         m_friendState = FriendState::Connecting;
         m_checkOnly = checkModsOnly;
         m_modsMatched = false;
-        // (No address in the log: players post their logs publicly.)
         LOG_INFO("%s the host by IP (port %u) as %s", checkModsOnly ? "Comparing mods with" : "Joining", port,
             myName.c_str());
         return true;
@@ -153,7 +153,6 @@ namespace coop
 
     void Coop::ForgetMyPlace()
     {
-        // Our position from before the load is stale too: the first one after it would look like a trip.
         m_hasPose = m_hasPlace = m_expecting = m_hasTravel = false;
         m_regroup = InGame();
     }
@@ -216,13 +215,12 @@ namespace coop
                 break;
             }
             if (m_role == Role::None)
-                return;  // left while reading (e.g. our mods can't be fixed from here)
+                return;
         }
 
         uint32_t now = GetTickCount();
         if (m_role == Role::Host)
         {
-            // Kick connections that never said hello (stops half-open connections hogging slots).
             std::vector<PeerId> silent;
             std::vector<PeerId> unanswered;
             for (auto& [peer, p] : m_players)
@@ -252,7 +250,7 @@ namespace coop
 
         if (m_role == Role::Friend && m_downloading)
         {
-            UpdateDownload();  // may leave co-op
+            UpdateDownload();
             if (m_role == Role::None)
                 return;
         }
@@ -295,7 +293,7 @@ namespace coop
             SendCompanions(now);
             if (!m_radioLines.empty() && IsDue(now, m_nextRadioResend))
             {
-                m_nextRadioResend = now + 10000;  // (whoever loaded in since hears what's playing)
+                m_nextRadioResend = now + 10000;
                 for (auto& [station, line] : m_radioLines)
                 {
                     uint32_t elapsed = now - m_radioStartedAt[station];
@@ -322,6 +320,10 @@ namespace coop
                     LOG_INFO("NPCs: sent %u updates (%u bytes to each friend) in 30 s; sharing %zu now",
                         m_npcUpdatesSent, m_npcBytesSent, m_sentNpcs.size());
                 m_npcUpdatesSent = m_npcBytesSent = 0;
+                if (m_playerCommandsSent)
+                    LOG_INFO("Scripted: sent %u commands (%u bytes to each friend) in 30 s", m_playerCommandsSent,
+                        m_playerCommandBytesSent);
+                m_playerCommandsSent = m_playerCommandBytesSent = 0;
             }
             else if (m_friendState == FriendState::Joined)
             {
@@ -401,7 +403,6 @@ namespace coop
 
         if (!player.joined && player.fixingMods)
         {
-            // Only pieces of the mod files we'd send: plugins and archives we have a fingerprint for.
             ModFileAsk ask;
             if (type != MsgType::ModFileAsk || !Decode(r, ask))
                 return Kick(peer, "Expected an ask for a mod file");
@@ -420,7 +421,7 @@ namespace coop
         }
 
         if (player.awaitingApproval)
-            return;  // (nothing to say until the host answers)
+            return;
 
         if (!player.joined)
         {
@@ -437,7 +438,6 @@ namespace coop
                     hello.hasMods ? "ours aren't known" : "they sent none: a tool like the fake friend?");
             else
             {
-                // Our list goes to them either way: their game shows what differs (and warns about xNVSE plugins).
                 SendModList(peer);
                 player.wantsFiles = hello.mods != m_modsPrint;
                 if (player.wantsFiles)
@@ -453,7 +453,6 @@ namespace coop
                 }
             }
 
-            // Only who the host lets in joins or gets our mod files (step 8.5); asked once a session.
             player.name = hello.name;
             if (!m_autoApprove && !m_approved.count(hello.name + "@" + player.from))
             {
@@ -462,7 +461,7 @@ namespace coop
                 player.askedAt = GetTickCount();
                 m_joinAsks.push_back({player.askId, hello.name, player.wantsFiles});
                 LOG_INFO("%s (%s) asks to join; asking the host", hello.name.c_str(),
-                    player.from.rfind("steam:", 0) == 0 ? player.from.c_str() : "by IP");  // (no address in logs)
+                    player.from.rfind("steam:", 0) == 0 ? player.from.c_str() : "by IP");
                 Writer w(MsgType::AskingHost);
                 m_net->Send(peer, w.Take());
                 return;
@@ -474,8 +473,8 @@ namespace coop
         {
             PlayerState state;
             if (!Decode(r, state))
-                return;  // damaged: drop it
-            state.playerId = player.id;  // they can only move themselves
+                return;
+            state.playerId = player.id;
             m_remotes[player.id].motion.Add(state.timeMs,
                 Pose{state.space, state.x, state.y, state.z, state.heading, state.flags, state.moves, state.pitch,
                     state.runSpeed},
@@ -489,7 +488,7 @@ namespace coop
             PlayerGear gear;
             if (!Decode(r, gear))
                 return;
-            gear.playerId = player.id;  // they can only dress themselves
+            gear.playerId = player.id;
             SendToJoined(Encode(gear), true, peer);
             SetRemoteGear(player.id, std::move(gear.items));
             return;
@@ -500,7 +499,7 @@ namespace coop
             PlayerHealth m;
             if (!Decode(r, m))
                 return;
-            m.playerId = player.id;  // they can only report their own
+            m.playerId = player.id;
             SendToJoined(Encode(m), true, peer);
             RemotePlayer& remote = m_remotes[player.id];
             remote.health = m.health;
@@ -519,7 +518,6 @@ namespace coop
         if (type == MsgType::Teleport)
         {
             Teleport m;
-            // Only for themselves: they go somewhere, or bring someone to them.
             if (Decode(r, m) && (m.mover == player.id || m.target == player.id) && IsPlayer(m.mover) &&
                 IsPlayer(m.target))
             {
@@ -544,7 +542,7 @@ namespace coop
             Progress m;
             if (!Decode(r, m))
                 return;
-            m.playerId = player.id;  // they can only report their own
+            m.playerId = player.id;
             SendToJoined(Encode(m), true, peer);
             if (m_progress.size() < kMaxQueuedItemChanges)
                 m_progress.push_back(m);
@@ -569,7 +567,7 @@ namespace coop
                 return;
             uint32_t now = GetTickCount();
             if (m_lastSaveAsk && now - m_lastSaveAsk < 1000)
-                return;  // (one a second is plenty)
+                return;
             m_lastSaveAsk = now;
             LOG_INFO("Saves: %s %s \"%s\"", player.name.c_str(), m.load ? "asks to load" : "saved", m.name.c_str());
             if (m_saveAsks.size() < kMaxQueuedItemChanges)
@@ -634,7 +632,7 @@ namespace coop
             if (!Decode(r, m))
                 return;
             if (!m_talk.Busy() || m_talk.Talker() != player.id)
-                return;  // (only whoever is talking)
+                return;
             m.playerId = player.id;
             SendToJoined(Encode(m), true, peer);
             if (m_subtitles.size() < kMaxQueuedItemChanges)
@@ -657,7 +655,6 @@ namespace coop
 
         if (type == MsgType::PlayerHit)
         {
-            // Friendly fire: only when the host's save has it on; a player that's there; not themselves; a limit.
             net::PlayerHit m;
             uint32_t now = GetTickCount();
             if (now - player.playerHitsSince >= 1000)
@@ -684,7 +681,7 @@ namespace coop
                 m.data.size()))
                 return;
             m.player = player.id;
-            SendToJoined(Encode(m), false, peer);  // (on to the others)
+            SendToJoined(Encode(m), false, peer);
             m_voice.push_back({player.id, std::move(m.data)});
             return;
         }
@@ -696,7 +693,7 @@ namespace coop
                 return;
             m.player = player.id;
             HeardModAnims(m.player, m.paths);
-            SendToJoined(Encode(m), true, peer);  // (on to the others)
+            SendToJoined(Encode(m), true, peer);
             return;
         }
 
@@ -707,7 +704,7 @@ namespace coop
                 return;
             m.player = player.id;
             HeardAnim(m.player, m.path);
-            SendToJoined(Encode(m), true, peer);  // (on to the others)
+            SendToJoined(Encode(m), true, peer);
             return;
         }
 
@@ -723,9 +720,9 @@ namespace coop
             m_looks[player.id] = m;
             ++m_looksChanges;
             if (!m.name.empty())
-                m_remotes[player.id].name = m.name;  // (their character's name, not Steam's: Alex, 2026-10-19)
+                m_remotes[player.id].name = m.name;
             LOG_INFO("Looks: %s's character, %s (%s)", player.name.c_str(), m.name.c_str(), m.female ? "female" : "male");
-            SendToJoined(Encode(m), true, peer);  // (on to the others)
+            SendToJoined(Encode(m), true, peer);
             return;
         }
 
@@ -739,7 +736,7 @@ namespace coop
                 return;
             if (!player.chatLimit.Allow(GetTickCount()))
                 return LOG_WARN("Chat: %s says too much at once; a line dropped", player.name.c_str());
-            SendToJoined(Encode(net::ChatLine{player.id, line, m.style}), true, peer);  // (on to the others)
+            SendToJoined(Encode(net::ChatLine{player.id, line, m.style}), true, peer);
             m_chat.push_back({player.id, NameOf(player.id), line, m.style});
             return;
         }
@@ -794,8 +791,6 @@ namespace coop
             {
                 if (!WithinLimit(player.itemMovesSince, player.itemMoves, kMaxItemMovesPerSecond))
                     return;
-                // Only items we share (near the group, still here), not one our player carries (ours wins), and not
-                // taken far from where it lies here.
                 auto ours = m_sentItems.find(move.ref);
                 if (ours == m_sentItems.end() || !ours->second.present)
                     continue;
@@ -809,7 +804,6 @@ namespace coop
                 if (dx * dx + dy * dy + dz * dz > kMaxItemMoveReach * kMaxItemMoveReach ||
                     m_itemMoves.size() >= kMaxQueuedItemMoves)
                     continue;
-                // (A later move of the same item replaces one not done yet.)
                 auto same = std::find_if(m_itemMoves.begin(), m_itemMoves.end(),
                     [&](const ItemMoveFrom& f) { return f.move.ref == move.ref; });
                 if (same != m_itemMoves.end())
@@ -861,7 +855,6 @@ namespace coop
                 return;
             if (m_itemChanges.size() >= kMaxQueuedItemChanges)
             {
-                // Can't drop it quietly: it happened in their game. Undone there instead.
                 LOG_WARN("Too many container changes from %s at once; undoing one", player.name.c_str());
                 ContainerChangeDone(player.id, m.seq, m.change);
                 return;
@@ -890,7 +883,7 @@ namespace coop
                 return;
             if (m_hits.size() >= kMaxQueuedHits)
                 return LOG_WARN("Too many hits from %s at once, dropped one", player.name.c_str());
-            m_hits.push_back({player.id, hit.targetRef, hit.damage});  // they can only hit as themselves
+            m_hits.push_back({player.id, hit.targetRef, hit.damage});
             return;
         }
 
@@ -908,7 +901,7 @@ namespace coop
             if (!player.joined || !Decode(r, m) || m_mines.size() >= 64)
                 return;
             m_mines.push_back({player.id, m});
-            SendToJoined(Encode(m), true, peer);  // (on to the others)
+            SendToJoined(Encode(m), true, peer);
             return;
         }
 
@@ -916,7 +909,7 @@ namespace coop
         {
             net::Revive m;
             if (Decode(r, m))
-                HostRevive(player.id, m.playerId);  // they can only revive as themselves
+                HostRevive(player.id, m.playerId);
             return;
         }
 
@@ -925,7 +918,7 @@ namespace coop
             net::Attack m;
             if (!Decode(r, m))
                 return;
-            m.playerId = player.id;  // they can only attack as themselves
+            m.playerId = player.id;
             SendToJoined(Encode(m), true, peer);
             QueueAttack(player.id, m.shots, m.release);
             return;
@@ -936,7 +929,7 @@ namespace coop
             net::ExplosionAt e;
             if (!Decode(r, e) || !WithinLimit(player.explosionsSince, player.explosions, kMaxExplosionsPerSecond))
                 return;
-            SendToJoined(Encode(e), true, peer);  // the other friends show it too
+            SendToJoined(Encode(e), true, peer);
             if (m_explosions.size() < kMaxQueuedExplosions)
                 m_explosions.push_back(e);
             return;
@@ -955,7 +948,7 @@ namespace coop
         if (type == MsgType::Travel)
         {
             net::Travel m;
-            if (Decode(r, m))  // they can only lead as themselves
+            if (Decode(r, m))
                 GroupTravels(player.id, Pose{m.space, m.x, m.y, m.z, m.heading}, GetTickCount());
             return;
         }
@@ -982,8 +975,8 @@ namespace coop
             m_friendState = FriendState::Joined;
             m_hostXp = welcome.hostXp;
             m_hostXpWaiting = true;
-            m_myLooksSent = false;  // (the host's game hears how we look)
-            m_myAnimSent = m_myAnim.empty();  // (and sees us sitting)
+            m_myLooksSent = false;
+            m_myAnimSent = m_myAnim.empty();
             m_myModAnimsSent = m_myModAnims.empty();
             m_questMods = welcome.questMods;
             m_mode = welcome.mode;
@@ -1026,7 +1019,7 @@ namespace coop
             if (!m_checkOnly || m_friendState != FriendState::WaitingForWelcome || !m_hostModsDone || !Decode(r, m))
                 return LOG_WARN("Bad 'mods match' from the host");
             if (!m.save.empty() && SaveNameOf(m.save) != m.save)
-                m.save.clear();  // (only plain save names: it goes into a console command later)
+                m.save.clear();
             LOG_INFO("Mods: ours are %s's (playing \"%s\"); loading a save joins", m.hostName.c_str(), m.save.c_str());
             m_matchedHost = m;
             m_modsMatched = true;
@@ -1049,14 +1042,13 @@ namespace coop
                 reject.reason = "(no reason given)";
             m_friendState = FriendState::Rejected;
             LOG_WARN("Host refused to let us join: %s", reject.reason.c_str());
-            m_rejectReason = m_modsDiffer ? "" : reject.reason;  // the mod report says why
+            m_rejectReason = m_modsDiffer ? "" : reject.reason;
         }
         else if (type == MsgType::PlayerJoined)
         {
             PlayerJoined m;
             if (!Decode(r, m) || m.playerId == m_myId)
                 return;
-            // Everyone else is the host and up to kMaxFriends - 1 friends; each gets a character in our game.
             if (!m_remotes.count(m.playerId) && m_remotes.size() >= kMaxFriends)
                 return LOG_WARN("The host announced more players than a game can have; ignoring %u", m.playerId);
             m_remotes[m.playerId].name = m.name;
@@ -1081,7 +1073,7 @@ namespace coop
             PlayerState m;
             if (!Decode(r, m))
                 return;
-            auto it = m_remotes.find(m.playerId);  // only players the host told us about
+            auto it = m_remotes.find(m.playerId);
             if (it != m_remotes.end())
                 it->second.motion.Add(m.timeMs, Pose{m.space, m.x, m.y, m.z, m.heading, m.flags, m.moves, m.pitch,
                     m.runSpeed},
@@ -1229,7 +1221,7 @@ namespace coop
             NpcGear m;
             if (!Decode(r, m))
                 return;
-            auto it = m_npcs.find(m.ref);  // (one we haven't heard of yet: it comes again in a few seconds)
+            auto it = m_npcs.find(m.ref);
             if (it != m_npcs.end() && it->second.gear != m.items)
             {
                 it->second.gear = std::move(m.items);
@@ -1567,8 +1559,12 @@ namespace coop
 
     void Coop::SharePlayerCommand(const net::PlayerCommand& c)
     {
-        if (m_role == Role::Host && InGame())
-            SendToJoined(Encode(c), true);
+        if (m_role != Role::Host || !InGame())
+            return;
+        Bytes data = Encode(c);
+        ++m_playerCommandsSent;
+        m_playerCommandBytesSent += static_cast<uint32_t>(data.size());
+        SendToJoined(data, true);
     }
 
     void Coop::ShareExplosion(const net::ExplosionAt& e)
@@ -1680,8 +1676,6 @@ namespace coop
         return it != m_remotes.end() && it->second.motion.Sample(GetTickCount(), out);
     }
 
-    // Host: a revive could come from anyone, so check both are in the game, the target is down, the reviver
-    // isn't, and they're next to each other.
     void Coop::HostRevive(uint8_t reviver, uint8_t target)
     {
         auto health = [&](uint8_t id, float& h, float& max) {
@@ -1714,13 +1708,11 @@ namespace coop
         if (target == m_myId)
         {
             m_revived = true;
-            // Up now, not when the game next reports our health: otherwise we'd count as down again meanwhile
-            // (seen in game, Oct 2026: "Alex is down" right after being revived, with a fresh bleed-out timer).
             m_myHealth = m_myMaxHealth * kReviveHealth;
             m_healthToSend = true;
             return;
         }
-        m_remotes[target].health = tmax * kReviveHealth;  // until their own report arrives
+        m_remotes[target].health = tmax * kReviveHealth;
         for (auto& [peer, p] : m_players)
             if (p.joined && p.id == target)
                 m_net->Send(peer, Encode(net::Revive{target}), true);
@@ -1732,7 +1724,7 @@ namespace coop
         size_t players = 0;
         auto check = [&](uint8_t id, float health, float maxHealth) {
             if (!(maxHealth > 0))
-                return;  // not heard yet
+                return;
             ++players;
             if (!IsDowned(health, maxHealth))
                 return;
@@ -1747,7 +1739,7 @@ namespace coop
         m_downedSince = std::move(since);
 
         if (m_downedSince.empty())
-            m_gameOverSent = false;  // everyone is up (after a reload, say)
+            m_gameOverSent = false;
         if (m_gameOverSent || m_downedSince.empty())
             return;
         for (auto& [id, at] : m_downedSince)
@@ -1821,7 +1813,6 @@ namespace coop
     {
         if (player.wantsFiles)
         {
-            // Their game asks them whether to fetch ours (then they restart and join again).
             player.fixingMods = true;
             player.lastAsk = GetTickCount();
             Writer w(MsgType::ModsDiffer);
@@ -1846,7 +1837,6 @@ namespace coop
         m_net->Send(peer, Encode(Welcome{player.id, m_myName, m_questMods, m_mode, m_myXp}));
         LOG_INFO("%s joined as player %u", player.name.c_str(), player.id);
 
-        // Tell them who's here, and everyone else about them.
         m_net->Send(peer, Encode(PlayerJoined{kHostPlayerId, m_myName}));
         for (auto& [otherPeer, other] : m_players)
             if (other.joined && otherPeer != peer)
@@ -1869,23 +1859,20 @@ namespace coop
             m_net->Send(peer, Encode(PlayerModAnims{id, paths}));
         for (const auto& [id, path] : m_anims)
             m_net->Send(peer, Encode(PlayerAnim{id, path}));
-        m_lastPoseSent = 0;  // send our position to them right away
-        m_sentNpcs.clear();  // and every NPC's
+        m_lastPoseSent = 0;
+        m_sentNpcs.clear();
         SendTalk(peer);
         for (auto& [_, g] : m_npcGear)
             g.changed = true;
-        // And what everyone is wearing (later changes reach them as they happen).
         m_net->Send(peer, Encode(PlayerGear{kHostPlayerId, m_myGear}));
         for (auto& [id, remote] : m_remotes)
             if (id != player.id)
                 m_net->Send(peer, Encode(PlayerGear{id, remote.gear}));
-        // And everyone's health.
         if (m_myMaxHealth > 0)
             m_net->Send(peer, Encode(PlayerHealth{kHostPlayerId, m_myHealth, m_myMaxHealth}));
         for (auto& [id, remote] : m_remotes)
             if (id != player.id && remote.maxHealth > 0)
                 m_net->Send(peer, Encode(PlayerHealth{id, remote.health, remote.maxHealth}));
-        // And come to where we are (DESIGN: the group stays together).
         if (m_hasPose)
             SendTravel(player.id, kHostPlayerId, m_myPose);
     }
@@ -1925,14 +1912,13 @@ namespace coop
         for (const std::string& line : DescribeForLog(d))
             LOG_WARN("  %s", line.c_str());
         if (!m_modsDiffer)
-            m_modReport = DescribeForScreen(d, "");  // we join anyway (if they differ, the host's answer asks)
+            m_modReport = DescribeForScreen(d, "");
     }
 
     void Coop::OfferModFix()
     {
         ModDifference d = CompareMods(m_hostMods, m_mods);
         std::string text = DescribeForScreen(d, "");
-        // What the host can send: plugins and archives with a fingerprint (the base game's own files have none).
         m_modsWanted.clear();
         m_modsExtra = d.extra;
         std::string unsendable;
@@ -1953,7 +1939,6 @@ namespace coop
         }
         if (!unsendable.empty())
         {
-            // Fixing the rest wouldn't be enough to join.
             LOG_WARN("Mods: the base game's own files differ (%s): not fixable from here", unsendable.c_str());
             m_modReport = text + "\nThe game's own files differ (" + unsendable +
                 "): check them in Steam (the game's Properties, Installed Files, Verify).";
@@ -2045,7 +2030,7 @@ namespace coop
                 SendWaitResult(WaitResult{id, false, 0, false, kNobody});
             }
             else
-                m_wait.Left(id);  // one less to answer (checked in Update)
+                m_wait.Left(id);
             m_loads.Left(id);
         }
     }
@@ -2066,7 +2051,6 @@ namespace coop
         return true;
     }
 
-    // A trip shows as a jump in our position: another place, or far away in the same one (fast travel).
     void Coop::CheckMyTravel(uint32_t now)
     {
         if (!m_hasPose)
@@ -2112,7 +2096,7 @@ namespace coop
             return;
         }
         if (m_expecting)
-            SendArrived();  // somewhere else, but the load is done: the world needn't wait for us
+            SendArrived();
         m_expecting = false;
         LOG_INFO("We went to place %08X (%.0f, %.0f, %.0f)", m_myPose.space, m_myPose.x, m_myPose.y, m_myPose.z);
         if (m_role == Role::Host)
@@ -2122,8 +2106,6 @@ namespace coop
                 m_myPose.heading}));
     }
 
-    // Host: someone went through a door or fast travelled; everyone else follows. Unless the group only just
-    // went somewhere else (two doors at once): then they come back to the group instead.
     void Coop::GroupTravels(uint8_t leader, const Pose& to, uint32_t now)
     {
         if (m_hasGroupPlace && now - m_groupMovedAt < m_travelCooldownMs)
@@ -2163,7 +2145,7 @@ namespace coop
     {
         if (m_hasPose && SamePlace(m_myPose, to))
         {
-            m_hasTravel = m_expecting = false;  // already there
+            m_hasTravel = m_expecting = false;
             SendArrived();
             return;
         }
@@ -2205,7 +2187,7 @@ namespace coop
         if (npcs.size() > kMaxNpcs)
             npcs.resize(kMaxNpcs);
         if (space != m_npcSpace)
-            m_sentNpcs.clear();  // somewhere else: everyone there is news
+            m_sentNpcs.clear();
         m_npcSpace = space;
         m_myNpcs = std::move(npcs);
     }
@@ -2224,7 +2206,6 @@ namespace coop
         }
         m_lastNpcsSent = now;
 
-        // NPCs we stopped sharing are forgotten, so they're news again if they come back.
         for (auto it = m_sentNpcs.begin(); it != m_sentNpcs.end();)
         {
             bool still = std::any_of(m_myNpcs.begin(), m_myNpcs.end(),
@@ -2248,7 +2229,6 @@ namespace coop
             m_sentNpcs[n.ref] = SentNpc{n, now};
             msg.npcs.push_back(n);
         }
-        // Positions first: a friend drops gear and attacks of NPCs it hasn't heard of yet.
         if (!msg.npcs.empty())
         {
             Bytes data = Encode(msg);
@@ -2256,7 +2236,6 @@ namespace coop
             m_npcBytesSent += static_cast<uint32_t>(data.size());
             SendToJoined(data, false);
         }
-        // Gear of the NPCs made while playing we still share: when changed, and now and then.
         for (auto it = m_npcGear.begin(); it != m_npcGear.end();)
         {
             bool still = std::any_of(m_myNpcs.begin(), m_myNpcs.end(),
@@ -2279,7 +2258,6 @@ namespace coop
         }
         if (!m_npcShots.empty())
         {
-            // Reliable: a missed shot isn't made up for by a later message, unlike a position.
             NpcAttacks attacks;
             for (auto& [ref, attack] : m_npcShots)
                 attacks.attacks.push_back(attack);
@@ -2417,14 +2395,14 @@ namespace coop
                     d.flags & kDoorLocked ? "locked" : "unlocked");
             m_sentDoors[d.ref] = d;
             if (std::any_of(msg.doors.begin(), msg.doors.end(), [&](const DoorState& o) { return o.ref == d.ref; }))
-                continue;  // (listed twice: once is enough)
+                continue;
             msg.doors.push_back(d);
             if (msg.doors.size() == kMaxDoorsPerMessage)
                 flush();
         }
         flush();
         if (m_sentDoors.size() > 4 * kMaxKnownDoors)
-            m_sentDoors.clear();  // (after a long trip: starts afresh, everything is resent once)
+            m_sentDoors.clear();
     }
 
     std::vector<DoorState> Coop::ObserveDoors(uint32_t now, const std::vector<LocalDoor>& local)
@@ -2519,8 +2497,6 @@ namespace coop
     {
         if (m_players.empty())
             return;
-        // (Only with a new list, a couple of times a second, or to send everything again: comparing every frame cost
-        // 0.25 ms a frame with crates and tumbleweeds listed too, 2026-10-16.)
         bool all = now - m_lastItemsSent >= kItemResendMs;
         if (!all && !m_itemsNew)
             return;
@@ -2544,7 +2520,7 @@ namespace coop
         for (const ItemState& it : m_myItems)
         {
             if (!now_.emplace(it.ref, it).second)
-                continue;  // (listed twice: once is enough)
+                continue;
             auto sent = m_sentItems.find(it.ref);
             bool changed = sent == m_sentItems.end() || sent->second.present != it.present ||
                 sent->second.base != it.base || sent->second.count != it.count || sent->second.held != it.held;
@@ -2555,10 +2531,8 @@ namespace coop
             if (changed || all)
                 add(it);
             else
-                now_[it.ref] = sent->second;  // (as last sent: small moves add up until it's sent again)
+                now_[it.ref] = sent->second;
         }
-        // Made while playing and no longer near us (picked up and gone from the game): gone for friends too. Others
-        // just went out of reach.
         for (const auto& [ref, it] : m_sentItems)
             if (now_.find(ref) == now_.end() && IsMadeWhilePlaying(ref) && it.present)
             {
@@ -2587,7 +2561,6 @@ namespace coop
         ItemActions actions = m_friendItems.Look(local, sameArea, GetTickCount());
         for (const Disagreement& d : actions.differ)
             m_desyncs.Saw(d, GetTickCount());
-        // Our game's moves of the host's items (step 8.9). (Logged when one starts moving.)
         uint32_t now = GetTickCount();
         for (const ItemMove& m : actions.moved)
         {
@@ -2761,7 +2734,7 @@ namespace coop
         bool wasBusy = m_talk.Busy();
         uint8_t wasTalker = m_talk.Talker();
         if (!m_talk.Report(m_myId, talking, npc))
-            return;  // a friend is talking: our game closes ours
+            return;
         if (m_talk.Busy() != wasBusy || m_talk.Talker() != wasTalker || talking)
             SendTalk(0);
     }
@@ -2788,7 +2761,7 @@ namespace coop
             if (p.joined && p.id != except)
                 players.push_back(p.id);
         if (except != kHostPlayerId)
-            players.push_back(kHostPlayerId);  // a friend led: we're on our way too (playthrough test, 2026-10-16)
+            players.push_back(kHostPlayerId);
         m_loads.Expect(players, now);
         UpdateFreeze(now);
     }
@@ -2895,7 +2868,6 @@ namespace coop
                 voters.push_back(p.id);
         if (!m_wait.Start(requester, hours, sleep, voters, GetTickCount()))
         {
-            // Another vote is open (or bad hours): only the one asking hears no.
             LOG_INFO("Wait: %s asked while another vote is open", NameOf(requester).c_str());
             WaitResult no{requester, false, 0, false, kNobody};
             if (from)
@@ -2911,7 +2883,7 @@ namespace coop
                 m_net->Send(peer, Encode(vote), true);
         if (requester != m_myId && m_waitEvents.size() < kMaxQueuedItemChanges)
             m_waitEvents.push_back(WaitEvent{WaitEvent::Kind::Asked, requester, hours, sleep, kNobody});
-        CheckWaitVote(GetTickCount());  // nobody else here: it passes at once
+        CheckWaitVote(GetTickCount());
     }
 
     void Coop::CheckWaitVote(uint32_t now)
@@ -2966,7 +2938,7 @@ namespace coop
         m.playerId = m_myId;
         for (char& c : m.text)
             if (static_cast<unsigned char>(c) < 32)
-                c = ' ';  // (no control characters in messages)
+                c = ' ';
         if (m.text.size() > kMaxSubtitleLength)
             m.text.resize(kMaxSubtitleLength);
         if (m_role == Role::Host)

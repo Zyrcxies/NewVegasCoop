@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "game/mover.h"
 
 #include "game/addresses.h"
@@ -16,7 +18,7 @@ namespace game
 
         using SetFlagsFn = void(__thiscall*)(void* mover, UInt32 flags);
         using ReleaseFn = void(__thiscall*)(void* mover);
-        using ResetFn = void(__thiscall*)(void* mover, UInt32 arg);  // (arg: one stack argument, passed on)
+        using ResetFn = void(__thiscall*)(void* mover, UInt32 arg);
 
         template <typename T>
         T Field(const void* object, uint32_t offset)
@@ -38,15 +40,11 @@ namespace game
             uintptr_t table = Table(mover);
             kind = table == mover::kActorMoverTable ? MoverKind::Npc :
                 table == mover::kPlayerMoverTable ? MoverKind::Player : MoverKind::Unknown;
-            // It must point back at its actor, or our map of it is wrong.
             if (kind != MoverKind::Unknown && Field<const void*>(mover, mover::kActor) != ref)
                 kind = MoverKind::Unknown;
             return mover;
         }
 
-        // The slot holds the game function we expect, or another plugin's hook of it (it chains on to the
-        // game's, so calling the slot is still right, and keeps that plugin working). Anything else inside
-        // the game means our map is wrong.
         bool SlotIs(uintptr_t table, int slot, uintptr_t expected, const char* what)
         {
             uintptr_t found = Slot(table, slot);
@@ -66,20 +64,17 @@ namespace game
             return false;
         }
 
-        // Held legs (HoldMovementFlags). Read from our chained slots, which may run on the game's AI threads, so
-        // every field is atomic; at worst a hold is a frame late or early.
         struct Hold
         {
             std::atomic<void*> mover{nullptr};
-            std::atomic<const void*> actor{nullptr};  // its mover must still point back at this actor
+            std::atomic<const void*> actor{nullptr};
             std::atomic<uint32_t> flags{0};
-            std::atomic<uint32_t> until{0};           // tick count it lapses at
+            std::atomic<uint32_t> until{0};
         };
-        constexpr size_t kMaxHolds = 64;  // friends' stand-ins and the host's NPCs (coop::kMaxNpcs)
+        constexpr size_t kMaxHolds = 64;
         Hold g_holds[kMaxHolds];
         bool g_hooked = false;
         bool g_warnedFull = false;
-        // What was in the slots before us (the game's functions, or another plugin's hooks of them).
         ReleaseFn g_nextRelease = nullptr;
         ResetFn g_nextReset = nullptr;
         SetFlagsFn g_setFlags = nullptr;
@@ -104,8 +99,6 @@ namespace game
             KeepHold(m);
         }
 
-        // (__fastcall's second register argument is unused: the game calls this as __thiscall with one stack
-        // argument, which this function pops like the game's.)
         void __fastcall OnReset(void* m, void*, UInt32 arg)
         {
             g_nextReset(m, arg);
@@ -139,7 +132,7 @@ namespace game
             g_nextRelease = reinterpret_cast<ReleaseFn>(release);
             if (Chain(kResetSlot, reinterpret_cast<void*>(&OnReset), reset))
                 g_nextReset = reinterpret_cast<ResetFn>(reset);
-            else  // (slot 4 is chained but slot 14 isn't: still mostly held)
+            else
                 LOG_ERROR("Couldn't chain onto NPC reset-movement");
             g_hooked = true;
             LOG_INFO("Holding puppets' legs (chained onto NPC release- and reset-movement)");
@@ -232,7 +225,7 @@ namespace game
         if (!mine && spare)
         {
             mine = spare;
-            mine->mover.store(nullptr);  // filled in before it's found again
+            mine->mover.store(nullptr);
             mine->actor.store(ref);
             mine->flags.store(flags);
             mine->until.store(now + kHoldMs);

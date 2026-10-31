@@ -1,7 +1,6 @@
-#pragma once
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
 
-// SHA-256 (FIPS 180-4): the fingerprint of a mod file, so two games can tell whether they have the same version
-// (step 8.6). Game-independent: tested in tests/ against the standard's examples.
+#pragma once
 
 #include <array>
 #include <cstddef>
@@ -16,7 +15,7 @@ namespace coop
 
         Sha256();
         void Add(const void* data, size_t size);
-        Digest Finish();  // the hash of everything added (the object can't be added to after)
+        Digest Finish();
 
         static Digest Of(const void* data, size_t size)
         {
@@ -31,6 +30,6 @@ namespace coop
         uint32_t m_state[8];
         uint8_t m_buffer[64];
         size_t m_buffered = 0;
-        uint64_t m_total = 0;  // bytes added
+        uint64_t m_total = 0;
     };
 }

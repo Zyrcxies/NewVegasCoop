@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "coop/steer.h"
 
 #include <cmath>
@@ -8,11 +10,8 @@ namespace coop
     {
         using namespace moves;
         constexpr uint32_t kTurning = kTurnLeft | kTurnRight;
-        // Copied from them: Sneaking, Swimming, Flying, Fall, Slide. Not Jump (0x1000): a puppet jumps for real
-        // instead (game::Jump), so the game moves it through the air.
         constexpr uint32_t kCopied = 0xEC00;
-        // A step counts towards a direction within 67.5 degrees of it, so diagonals get two flags.
-        constexpr float kDirection = 0.38f;  // cos(67.5)
+        constexpr float kDirection = 0.38f;
         constexpr uint32_t kDirections = kForward | kBackward | kLeft | kRight;
     }
 
@@ -25,7 +24,7 @@ namespace coop
         float speed = std::sqrt(vx * vx + vy * vy);
 
         bool theyMove = (in.theirFlags & kDirections) != 0;
-        if (in.theirFlags & (kWalking | kRunning))  // their own flags arrived (a fake friend's may not have them)
+        if (in.theirFlags & (kWalking | kRunning))
         {
             m_moving = theyMove || off > (m_moving ? kStopOff : kStartOff);
             m_running = theyMove && ((in.theirFlags & kRunning) || off > kCatchUpRun);
@@ -37,9 +36,9 @@ namespace coop
         }
         uint32_t flags = (in.theirFlags & kCopied) | (m_running ? kRunning : kWalking);
         if (!m_moving)
-            return flags | (in.theirFlags & kTurning);  // standing: their turning-on-the-spot
+            return flags | (in.theirFlags & kTurning);
         if (speed < 1)
-            return flags | (in.theirFlags & kDirections);  // (moving on the spot, against a wall: their keys)
+            return flags | (in.theirFlags & kDirections);
 
         float s = std::sin(in.heading), c = std::cos(in.heading);
         float forward = (vx * s + vy * c) / speed;

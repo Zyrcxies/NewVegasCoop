@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "game/steam.h"
 
 #include "game/addresses.h"
@@ -20,7 +22,7 @@ namespace game
     {
         void* g_client = nullptr;
         void* g_user = nullptr;
-        void* g_voiceUser = nullptr;  // (a newer ISteamUser, for its voice)
+        void* g_voiceUser = nullptr;
         void* g_friends = nullptr;
         void* g_networking = nullptr;
         bool g_tried = false;
@@ -32,7 +34,6 @@ namespace game
             return reinterpret_cast<Fn>((*reinterpret_cast<void***>(iface))[index]);
         }
 
-        // Steam's CCallbackBase, declared as Valve's headers do (MSVC lays the vtable out the same way for both).
         class CallbackBase
         {
         public:
@@ -47,7 +48,7 @@ namespace game
 
         std::mutex g_queueMutex;
         std::deque<net::SteamId> g_requests;
-        std::deque<std::pair<net::SteamId, uint8_t>> g_fails;  // who, Steam's reason
+        std::deque<std::pair<net::SteamId, uint8_t>> g_fails;
 
         class SessionRequest : public CallbackBase
         {
@@ -200,9 +201,6 @@ namespace game
 
     namespace
     {
-        // Recording runs on a thread of its own: starting it took ~100 ms on the laptop (lab 2026-10-17), the game
-        // frozen on every press of the push-to-talk key. (Steam's docs allow calling it from other threads.) Only this
-        // thread asks Steam's voice recording anything; the game's thread takes what it recorded from `recorded`.
         struct VoiceRecorder
         {
             std::mutex mutex;
@@ -210,11 +208,10 @@ namespace game
             bool want = false;
             bool quit = false;
             std::deque<std::vector<uint8_t>> recorded;
-            bool running = false;  // (the thread is let go of: at exit Windows ends it, and a held std::thread would
-                                   // end the game with an error)
+            bool running = false;
         } g_recorder;
-        constexpr size_t kMaxRecorded = 16;    // waiting to be taken (the oldest dropped)
-        constexpr uint32_t kTailMs = 1000;     // Steam hands over the last of it a moment after recording stops
+        constexpr size_t kMaxRecorded = 16;
+        constexpr uint32_t kTailMs = 1000;
         constexpr uint32_t kRecordLookMs = 20;
 
         bool TakeRecorded(std::vector<uint8_t>& out)
@@ -246,11 +243,10 @@ namespace game
                 {
                     std::unique_lock<std::mutex> lock(g_recorder.mutex);
                     auto asked = [&] { return g_recorder.quit || g_recorder.want != on; };
-                    // (One condition for both ways: notify_all, so the right one wakes.)
                     if (on || tail)
                         g_recorder.wake.wait_for(lock, std::chrono::milliseconds(kRecordLookMs), asked);
                     else
-                        g_recorder.wake.wait(lock, asked);  // (asleep while there's nothing to record)
+                        g_recorder.wake.wait(lock, asked);
                     if (g_recorder.quit)
                         break;
                     want = g_recorder.want;
@@ -299,7 +295,7 @@ namespace game
                 std::thread(RecordVoice).detach();
                 g_recorder.running = true;
             }
-            catch (...)  // (no thread to be had: no voice, rather than the game ending)
+            catch (...)
             {
                 LOG_WARN("Voice: couldn't start recording (no thread)");
                 return false;
@@ -326,7 +322,6 @@ namespace game
 
     void StopVoice()
     {
-        // (A moment for it to stop recording; it's never in a call to Steam for long.)
         std::unique_lock<std::mutex> lock(g_recorder.mutex);
         g_recorder.quit = true;
         g_recorder.wake.notify_all();
@@ -338,8 +333,7 @@ namespace game
         out.clear();
         if (!g_voiceUser || in.empty())
             return false;
-        // (Another player's bytes: Steam's decoder reads them; what it writes is kept to our buffer's size.)
-        static std::vector<int16_t> s_buffer;  // up to half a second (kept: packets come many times a second)
+        static std::vector<int16_t> s_buffer;
         s_buffer.resize(rate);
         std::vector<int16_t>& buffer = s_buffer;
         uint32_t written = 0;

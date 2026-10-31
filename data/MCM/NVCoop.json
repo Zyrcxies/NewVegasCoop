@@ -328,6 +328,23 @@
 						"valueMin": 0,
 						"valueMax": 120
 					}
+				},
+				"26": {
+					"title": "Joining by IP",
+					"enable": 1,
+					"type": 0
+				},
+				"27": {
+					"title": "Show My Address",
+					"type": 5,
+					"enable": 1,
+					"mouse": "Switch on to see this PC's addresses for friends joining by IP (only you see them; off and on again to see them again)",
+					"vars": [
+						{
+							"configINI": "Settings:bShowAddress",
+							"default": 0
+						}
+					]
 				}
 			}
 		}

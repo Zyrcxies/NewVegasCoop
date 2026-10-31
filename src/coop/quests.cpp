@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "coop/quests.h"
 
 #include <cstring>
@@ -44,15 +46,12 @@ namespace coop
 
     bool IsPerPlayerQuest(uint32_t formId, const std::vector<std::string>& loadOrder)
     {
-        // The DLCs' quests that are a mechanic on the player rather than the story: their scripts run in every game,
-        // each for its own player (Dead Money playthrough, 2026-10-16: a friend's bomb collar never beeped, its quest
-        // script detached, until the host left and it ran).
         struct PerPlayer { const char* file; uint32_t id; };
         static const PerPlayer kQuests[] = {
-            {"DeadMoney.esm", 0x006E93},  // NVDLC01BombCollarQuest: the collar's beeping countdown near radios
-            {"DeadMoney.esm", 0x00E882},  // NVDLC01GlobalToxicDamage: the Cloud hurting the player
-            {"DeadMoney.esm", 0x00C543},  // NVDLC01ToxicCloud
-            {"DeadMoney.esm", 0x013F58},  // NVDLC01ElijahCollarBark: Elijah's warnings about the collar
+            {"DeadMoney.esm", 0x006E93},
+            {"DeadMoney.esm", 0x00E882},
+            {"DeadMoney.esm", 0x00C543},
+            {"DeadMoney.esm", 0x013F58},
         };
         size_t index = formId >> 24;
         if (index >= loadOrder.size())
@@ -75,5 +74,23 @@ namespace coop
             if (_stricmp(mod.c_str(), loadOrder[index].c_str()) == 0)
                 return true;
         return false;
+    }
+
+    std::vector<std::string> WithStoryMods(const std::vector<std::string>& listed,
+        const std::vector<std::string>& loadOrder)
+    {
+        static const char* const kStoryMods[] = {"TaleOfTwoWastelands.esm", "NewCalifornia.esm"};
+        std::vector<std::string> mods = listed;
+        for (const char* story : kStoryMods)
+        {
+            bool loaded = false, already = false;
+            for (const std::string& f : loadOrder)
+                loaded |= _stricmp(f.c_str(), story) == 0;
+            for (const std::string& m : mods)
+                already |= _stricmp(m.c_str(), story) == 0;
+            if (loaded && !already)
+                mods.push_back(story);
+        }
+        return mods;
     }
 }

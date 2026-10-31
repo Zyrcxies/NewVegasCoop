@@ -1,7 +1,6 @@
-#pragma once
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
 
-// A character in our world for each other player: a puppet (game::Puppet, DESIGN rule 7) copying what their
-// game sends. Downed players' characters lie knocked out.
+#pragma once
 
 #include "coop/coop.h"
 #include "game/puppet.h"
@@ -18,55 +17,45 @@ namespace game
     class StandIns
     {
     public:
-        // Every frame while a game is loaded. myPose: where our own character is.
-        // cutscene: a script has our player's movement locked (not our own downed or waiting): their characters are
-        // hidden and go through everyone meanwhile (Alex, 2026-10-30: they blocked the view).
         void Update(const coop::Coop& coop, uint32_t now, const coop::Pose& myPose, bool cutscene = false);
-        void RemoveAll();  // delete them from the world
-        void Forget();     // the world was unloaded (they're gone with it)
-        std::vector<uint32_t> RefIds() const;  // their characters, for cleaning up after loading a save
-        TESObjectREFR* Character(uint8_t playerId) const;  // null if they have none right now
-        // That player shot, swung or threw (release: their throw left their hand): their character does too.
+        void RemoveAll();
+        void Forget();
+        std::vector<uint32_t> RefIds() const;
+        TESObjectREFR* Character(uint8_t playerId) const;
         void Attack(uint8_t playerId, uint8_t shots, bool release = false);
         bool IsStandIn(const TESObjectREFR* ref) const { return PlayerIdOf(ref) >= 0; }
-        int PlayerIdOf(const TESObjectREFR* ref) const;  // whose stand-in it is; -1: not a stand-in
+        int PlayerIdOf(const TESObjectREFR* ref) const;
 
     private:
         struct Entry
         {
-            TESObjectREFR* ref = nullptr;  // the character (checked against refId each frame: see Live)
+            TESObjectREFR* ref = nullptr;
             uint32_t refId = 0;
             Puppet puppet;
             uint32_t gearChanges = 0;
             bool hasGear = false;
-            bool downed = false;  // lying down because its player is downed
-            bool onMap = false;   // shown on the Pip-Boy map (Alex, 2026-10-30)
-            std::string anim;     // the furniture animation it plays because its player sits ("" none)
-            std::vector<std::string> modAnims;  // animation files from mods applied to it (as its player has them)
-            uint32_t nextHoldAt = 0;  // sitting: put back on their seat then
-            uint32_t nextAnimCheckAt = 0;  // sitting: checked it really plays the animation then
-            bool ghost = false;   // its collision is off (sitting or downed: held in place then)
-            bool hidden = false;  // unseen (a cutscene)
-            uint32_t nextCalmAt = 0;  // when to check it isn't fighting
-            // Created, but the game is still loading its body in the background: until then we leave it alone
-            // (changing it meanwhile can damage the game's memory and crash it later).
+            bool downed = false;
+            bool onMap = false;
+            std::string anim;
+            std::vector<std::string> modAnims;
+            uint32_t nextHoldAt = 0;
+            uint32_t nextAnimCheckAt = 0;
+            bool ghost = false;
+            bool hidden = false;
+            uint32_t nextCalmAt = 0;
             bool loading = true;
             uint32_t spawnedAt = 0;
-            uint32_t retryAt = 0;  // when spawning failed, try again then
-            uint32_t nextBringAt = 0;  // moved over to us at most this often
-            uint32_t looksSeen = 0;    // coop's LooksChanges when its looks were last made their player's (0: never)
-            uint32_t nextLooksAt = 0;  // looks made again at most this often (changes meanwhile wait, the latest kept)
+            uint32_t retryAt = 0;
+            uint32_t nextBringAt = 0;
+            uint32_t looksSeen = 0;
+            uint32_t nextLooksAt = 0;
         };
         bool Spawn(const coop::RemotePlayer& remote, Entry& e, uint32_t now, const net::PlayerLooks* looks);
-        // Its character, if the game still has it (one left in a part of the world that was unloaded can be
-        // deleted; NPCs are looked up each frame for the same reason).
         static TESObjectREFR* Live(const Entry& e);
         static void ShowOnMap(Entry& e, bool on);
-        // Sitting synced (Alex, 2026-10-30): their furniture animation, on their seat.
-        // True while it sits (its legs left alone).
-        static bool Furniture(const coop::Coop& coop, uint8_t id, Entry& e, const coop::Pose& pose, uint32_t now);  // (removing is safe for a character the game deleted)
+        static bool Furniture(const coop::Coop& coop, uint8_t id, Entry& e, const coop::Pose& pose, uint32_t now);
 
-        std::map<uint8_t, Entry> m_entries;  // by player id
-        std::map<uint8_t, bool> m_tooFar;    // players further off than we show (logged when it changes)
+        std::map<uint8_t, Entry> m_entries;
+        std::map<uint8_t, bool> m_tooFar;
     };
 }

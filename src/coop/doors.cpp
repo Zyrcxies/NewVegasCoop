@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "coop/doors.h"
 
 #include "coop/clock.h"
@@ -23,7 +25,6 @@ namespace coop
         std::vector<net::DoorState>& uses)
     {
         std::vector<net::DoorState> fixes;
-        // Doors we no longer have nearby are forgotten (the host repeats its doors every couple of seconds).
         for (auto it = m_doors.begin(); it != m_doors.end();)
         {
             bool here = std::any_of(local.begin(), local.end(),
@@ -46,9 +47,9 @@ namespace coop
             if (k.waitUntil)
             {
                 if (k.heard && k.host == d.state)
-                    k.waitUntil = 0;  // the host agrees
+                    k.waitUntil = 0;
                 else if (!IsDue(now, k.waitUntil))
-                    continue;         // give the host time to answer
+                    continue;
                 k.waitUntil = 0;
             }
             if (changed && d.nearMe && (!k.heard || d.state != k.host))

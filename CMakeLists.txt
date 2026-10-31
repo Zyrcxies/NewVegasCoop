@@ -66,6 +66,8 @@ add_library(NVCoop SHARED
     src/display.cpp
     src/game/game.cpp
     src/game/escape_menu.cpp
+    src/game/level_up.cpp
+    src/game/remove_all_items.cpp
     src/game/standins.cpp
     src/game/npcs.cpp
     src/game/doors.cpp

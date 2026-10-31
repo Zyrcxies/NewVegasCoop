@@ -1,3 +1,5 @@
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
+
 #include "dev/inspect_text.h"
 
 #include <cmath>
@@ -8,7 +10,6 @@ namespace dev
 {
     namespace
     {
-        // Movement flag names (JIP LN GameObjects.h, ActorMover::MovementFlags).
         struct FlagName { uint32_t bit; const char* name; };
         constexpr FlagName kMoveFlags[] = {
             {0x1, "Forward"}, {0x2, "Backward"}, {0x4, "Left"}, {0x8, "Right"},
@@ -40,7 +41,6 @@ namespace dev
                 a.knocked, a.sitting, a.package, a.procedure);
         }
 
-        // JIP LN GameProcess.h, enum AnimAction.
         const char* ActionName(int a)
         {
             static const char* const kNames[] = {"EquipWeapon", "UnequipWeapon", "Attack", "AttackEject",

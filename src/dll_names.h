@@ -1,11 +1,9 @@
-#pragma once
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
 
-// Which DLLs are kept out of the game (game-independent, so it's tested).
+#pragma once
 
 #include <cstddef>
 
-// Discord's overlay hook (DiscordHook.dll): it crashes New Vegas even with the overlay turned off.
-// path is the name or full path the DLL is loaded by, len its length in characters (it may not end in 0).
 inline bool IsBlockedDll(const wchar_t* path, size_t len)
 {
     static const wchar_t kName[] = L"discordhook.dll";

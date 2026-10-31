@@ -1,7 +1,6 @@
-#pragma once
+// New Vegas Co-op by Zyrcxies (https://github.com/Zyrcxies/NewVegasCoop). Reusing this code? See LICENSE: credit and the same license are required.
 
-// Voice chat's sound out: the others' voices (coop::VoiceMixer) played as one stereo stream through Windows' wave out,
-// on a thread of its own, 20 ms at a time.
+#pragma once
 
 #include "coop/voice.h"
 
@@ -14,7 +13,7 @@ class VoiceOut
 {
 public:
     ~VoiceOut();
-    void Push(uint8_t who, const std::vector<int16_t>& samples);  // starts the stream on first use
+    void Push(uint8_t who, const std::vector<int16_t>& samples);
     void SetMix(uint8_t who, float volume, float pan);
     bool Talking(uint8_t who);
     float Level(uint8_t who);
