@@ -14,7 +14,7 @@
 
 namespace net
 {
-    constexpr uint32_t kProtocolVersion = 65;
+    constexpr uint32_t kProtocolVersion = 66;
     constexpr size_t kMaxNameLength = 32;
     constexpr size_t kMaxReasonLength = 200;
     constexpr size_t kMaxMessageSize = 64 * 1024;
@@ -88,6 +88,7 @@ namespace net
         Teleport = 67,
         PlayerAnim = 68,
         PlayerModAnims = 69,
+        Drag = 70,
         MineChange = 63,
         ModsMatch = 48,
     };
@@ -535,6 +536,13 @@ namespace net
     };
     Bytes Encode(const Teleport& m);
     bool Decode(Reader& r, Teleport& m);
+    struct Drag
+    {
+        uint8_t dragger = 0, target = 0;
+        bool on = false;
+    };
+    Bytes Encode(const Drag& m);
+    bool Decode(Reader& r, Drag& m);
     constexpr size_t kMaxMarkersPerMessage = 200;
     Bytes EncodeTravelMarkers(const std::vector<uint32_t>& refs);
     bool DecodeTravelMarkers(Reader& r, std::vector<uint32_t>& refs);

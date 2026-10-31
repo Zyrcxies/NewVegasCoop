@@ -980,6 +980,24 @@ namespace net
         return r.U8(m.mover) && r.U8(m.target) && m.mover != m.target && r.AtEnd();
     }
 
+    Bytes Encode(const Drag& m)
+    {
+        Writer w(MsgType::Drag);
+        w.U8(m.dragger);
+        w.U8(m.target);
+        w.U8(m.on ? 1 : 0);
+        return w.Take();
+    }
+
+    bool Decode(Reader& r, Drag& m)
+    {
+        uint8_t on = 0;
+        if (!r.U8(m.dragger) || !r.U8(m.target) || !r.U8(on) || on > 1 || m.dragger == m.target || !r.AtEnd())
+            return false;
+        m.on = on != 0;
+        return true;
+    }
+
     Bytes EncodeTravelMarkers(const std::vector<uint32_t>& refs)
     {
         Writer w(MsgType::TravelMarkers);

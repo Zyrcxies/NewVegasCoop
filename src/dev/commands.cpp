@@ -829,6 +829,17 @@ namespace dev
                 game::SetWeaponOut(game::Player(), !hasNumber || number != 0);
                 Say("Our weapon %s", !hasNumber || number != 0 ? "out" : "away");
             }
+            else if (_stricmp(action, "draglimits") == 0)
+            {
+                bool* alwaysRun = game::PlayerAlwaysRun();
+                bool was = alwaysRun && *alwaysRun;
+                LOG_INFO("Lab: always-run %d", was ? 1 : 0);
+                if (!hasNumber)
+                    return Say("Always-run %d", was ? 1 : 0);
+                game::SetDragging(number != 0);
+                Say("Dragging limits %s; always-run was %d, now %d", number ? "on" : "off", was ? 1 : 0,
+                    alwaysRun && *alwaysRun ? 1 : 0);
+            }
             else if (_stricmp(action, "lookat") == 0)
             {
                 TESObjectREFR* who = selected ? selected : game::LookupRef(g_mirror->Copier());

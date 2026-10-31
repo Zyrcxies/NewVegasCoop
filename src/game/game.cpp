@@ -144,6 +144,8 @@ namespace game
         Script* g_bodyPartMult = nullptr;
         Script* g_keyDisabled = nullptr;
         Script* g_disableKey = nullptr;
+        Script* g_controlDisabled = nullptr;
+        Script* g_disableControl = nullptr;
         Script* g_loadingScreen = nullptr;
         Script* g_aiState = nullptr;
         Script* g_print = nullptr;
@@ -906,6 +908,23 @@ namespace game
             "    DisableKey iKey\n"
             "  else\n"
             "    EnableKey iKey\n"
+            "  endif\n"
+            "End\n");
+        g_controlDisabled = Compile("control disabled",
+            "int iControl\n"
+            "int iOff\n"
+            "Begin Function {iControl}\n"
+            "  set iOff to IsControlDisabled iControl\n"
+            "  SetFunctionValue iOff\n"
+            "End\n");
+        g_disableControl = Compile("disable control",
+            "int iControl\n"
+            "int iOff\n"
+            "Begin Function {iControl, iOff}\n"
+            "  if iOff\n"
+            "    DisableControl iControl\n"
+            "  else\n"
+            "    EnableControl iControl\n"
             "  endif\n"
             "End\n");
         g_controlPressed = Compile("control pressed",
@@ -1860,6 +1879,54 @@ namespace game
             "%04X (weapon layers); weapon %s", SequenceName(slots[0]), SequenceName(slots[1]), SequenceName(slots[2]),
             SequenceName(playing[4]), SequenceName(playing[5]), SequenceName(playing[6]), ref->rotX, group(0), group(4),
             group(5), group(6), (StanceFlags(ref) & coop::Pose::kWeaponOut) ? "out" : "away");
+    }
+
+    namespace
+    {
+        bool g_dragging = false;
+        bool g_dragAlwaysRun = false;
+        std::vector<int> g_dragControlsOff;
+    }
+
+    bool* PlayerAlwaysRun()
+    {
+        TESObjectREFR* player = Player();
+        return player ? reinterpret_cast<bool*>(reinterpret_cast<uint8_t*>(player) + layout::kPlayerAlwaysRun) : nullptr;
+    }
+
+    void SetDragging(bool on)
+    {
+        TESObjectREFR* player = Player();
+        bool* alwaysRun = PlayerAlwaysRun();
+        if (on == g_dragging || !player || !alwaysRun || !g_controlDisabled || !g_disableControl)
+            return;
+        g_dragging = on;
+        if (on)
+        {
+            SetWeaponOut(player, false);
+            for (int control : {layout::kControlAttack, layout::kControlAimBlock, layout::kControlReadyItem,
+                     layout::kControlRun, layout::kControlAlwaysRun, layout::kControlJump, layout::kControlVats})
+            {
+                NVSEArrayVarInterface::Element result;
+                if (g_scripts->CallFunction(g_controlDisabled, player, nullptr, &result, 1, static_cast<uint32_t>(control)) &&
+                    result.GetNumber() == 0)
+                {
+                    g_scripts->CallFunction(g_disableControl, player, nullptr, nullptr, 2, static_cast<uint32_t>(control), 1u);
+                    g_dragControlsOff.push_back(control);
+                }
+            }
+            g_dragAlwaysRun = *alwaysRun;
+            *alwaysRun = false;
+        }
+        else
+        {
+            for (int control : g_dragControlsOff)
+                g_scripts->CallFunction(g_disableControl, player, nullptr, nullptr, 2, static_cast<uint32_t>(control), 0u);
+            g_dragControlsOff.clear();
+            *alwaysRun = g_dragAlwaysRun;
+        }
+        LOG_INFO("Dragging: %s (always-run %s)", on ? "walking only, no weapon" : "back to normal",
+            on ? (g_dragAlwaysRun ? "was on: off till we let go" : "was off") : (*alwaysRun ? "on again" : "off"));
     }
 
     void SetWeaponOut(TESObjectREFR* ref, bool out)

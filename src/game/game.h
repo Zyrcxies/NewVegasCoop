@@ -70,6 +70,8 @@ namespace game
     void SetPitch(TESObjectREFR* ref, float pitch);
     void LogAimSlots(TESObjectREFR* ref);
     void SetWeaponOut(TESObjectREFR* ref, bool out);
+    void SetDragging(bool on);
+    bool* PlayerAlwaysRun();
     void SetAlert(TESObjectREFR* ref, bool alert);
     void SetRestrained(TESObjectREFR* ref, bool on);
     void SetCombatOff(TESObjectREFR* ref, bool off);

@@ -1063,6 +1063,8 @@ namespace
 
     void OnWorldLoaded()
     {
+        if (int dragged = g_coop.Dragging(g_coop.MyPlayerId()); g_coop.InGame() && dragged >= 0)
+            g_coop.Drag(static_cast<uint8_t>(dragged), false);
         g_fovAfterLoad = true;
         g_forced.clear();
         g_threats.Clear();
@@ -1215,6 +1217,12 @@ namespace
     bool g_gameOver = false;
     int g_reviving = -1;
     uint32_t g_reviveStart = 0, g_reviveAgainAt = 0;
+    constexpr float kDragBehind = 70;
+    constexpr float kDragFollowMax = 400;
+    bool g_grabWas = false;
+    int g_draggedBy = -1;
+    uint32_t g_draggedSince = 0;
+    std::string g_reviveHint;
 
     const std::string kDownedAnim = "Characters\\_Male\\IdleAnims\\dlcpittlayingonfloorinpain.kf";
 
@@ -1238,7 +1246,7 @@ namespace
     {
         if (g_reviving < 0 || !g_coop.InGame())
         {
-            game::ShowReviveBar("");
+            game::ShowReviveBar(g_coop.InGame() ? g_reviveHint : "");
             return;
         }
         constexpr int kCells = 20;
@@ -1257,6 +1265,16 @@ namespace
             g_waitForHostLoad = false;
             game::SetPlayerControls(true);
         }
+        int dragging = g_coop.InGame() ? g_coop.Dragging(g_coop.MyPlayerId()) : -1;
+        static bool s_dragLimits = false;
+        if (bool limits = dragging >= 0 && !g_downed && !g_gameOver; limits != s_dragLimits)
+        {
+            s_dragLimits = limits;
+            game::SetDragging(limits);
+        }
+        bool grab = game::IsControlPressed(game::layout::kControlGrab), grabTapped = grab && !g_grabWas;
+        g_grabWas = grab;
+        g_reviveHint.clear();
         if (!g_coop.InGame() || g_gameOver || g_waitForHostLoad)
         {
             SetDowned(false, now);
@@ -1306,6 +1324,36 @@ namespace
             LOG_DEBUG("Our health %.1f / %.1f, life state %d%s", game::Health(player), maxHealth,
                 game::LifeState(player), g_downed ? ", downed" : "");
         }
+        int draggedBy = g_downed ? g_coop.DraggedBy(g_coop.MyPlayerId()) : -1;
+        if (draggedBy != g_draggedBy)
+        {
+            if (draggedBy >= 0)
+            {
+                g_draggedSince = now;
+                game::Notify((g_coop.NameOf(static_cast<uint8_t>(draggedBy)) + " is dragging you (your bleed-out is "
+                    "paused)").c_str());
+            }
+            else if (g_draggedBy >= 0)
+                g_downedAt += now - g_draggedSince;
+            g_draggedBy = draggedBy;
+        }
+        if (g_downed && draggedBy >= 0)
+        {
+            auto it = g_coop.Remotes().find(static_cast<uint8_t>(draggedBy));
+            coop::Pose them;
+            if (it != g_coop.Remotes().end() && it->second.motion.Sample(now, them) && them.space == me.space)
+            {
+                coop::Pose to = me;
+                to.x = them.x - kDragBehind * std::sin(them.heading);
+                to.y = them.y - kDragBehind * std::cos(them.heading);
+                to.heading = them.heading;
+                if (std::fabs(them.z - me.z) > 60)
+                    to.z = them.z;
+                float dx = to.x - me.x, dy = to.y - me.y;
+                if (dx * dx + dy * dy > 1 && dx * dx + dy * dy < kDragFollowMax * kDragFollowMax)
+                    game::Move(player, to);
+            }
+        }
         if (g_downed)
         {
             static uint32_t s_nextPainCheck = 0;
@@ -1315,7 +1363,7 @@ namespace
                 if (!game::IsPlayingAnimFile(player, kDownedAnim))
                     game::PlayAnimFile(player, kDownedAnim);
             }
-            if (coop::IsDue(now, g_nextBleedNotice))
+            if (draggedBy < 0 && coop::IsDue(now, g_nextBleedNotice))
             {
                 g_nextBleedNotice = now + 10000;
                 uint32_t gone = now - g_downedAt;
@@ -1341,6 +1389,14 @@ namespace
                 break;
             }
         }
+        if (grabTapped && dragging >= 0)
+            g_coop.Drag(static_cast<uint8_t>(dragging), false);
+        else if (grabTapped && target >= 0 && g_coop.DraggedBy(static_cast<uint8_t>(target)) < 0)
+            g_coop.Drag(static_cast<uint8_t>(target), true);
+        if (dragging >= 0)
+            g_reviveHint = "Dragging " + g_coop.NameOf(static_cast<uint8_t>(dragging)) + ": Z to let go";
+        else if (target >= 0)
+            g_reviveHint = "Hold E to revive " + name + ", Z to drag";
         bool holding = target >= 0 && coop::IsDue(now, g_reviveAgainAt) &&
             game::IsControlPressed(game::layout::kControlActivate);
         if (!holding)
@@ -1382,6 +1438,13 @@ namespace
             game::MaxHealth(player));
         if (uint8_t locked = game::PlayerDisabledControls())
             std::snprintf(out + std::strlen(out), sizeof(out) - std::strlen(out), "; controls locked %02X", locked);
+        for (const auto& [id, remote] : g_coop.Remotes())
+        {
+            coop::Pose at;
+            if (game::GetPose(g_standIns.Character(id), at))
+                std::snprintf(out + std::strlen(out), sizeof(out) - std::strlen(out), "; player %u at %.0f %.0f %.0f", id,
+                    at.x, at.y, at.z);
+        }
         return out;
     }
 
@@ -1461,14 +1524,19 @@ namespace
         }
         game::UpdateChatAbove();
         static std::map<uint8_t, uint32_t> s_downedSince;
-        uint32_t now = GetTickCount();
+        static uint32_t s_lastMarks = 0;
+        uint32_t now = GetTickCount(), step = s_lastMarks ? now - s_lastMarks : 0;
+        s_lastMarks = now;
         std::vector<game::FriendMark> friends;
         for (const auto& [id, remote] : g_coop.InGame() ? g_coop.Remotes() : std::map<uint8_t, coop::RemotePlayer>())
         {
+            bool dragged = g_coop.DraggedBy(id) >= 0;
             if (!remote.Downed())
                 s_downedSince.erase(id);
             else if (!s_downedSince.count(id))
                 s_downedSince[id] = now;
+            else if (dragged)
+                s_downedSince[id] += step;
             TESObjectREFR* who = g_standIns.Character(id);
             if (!who || g_cutscene || (!g_config.friendMarkers && !remote.Downed()))
                 continue;
@@ -1479,7 +1547,8 @@ namespace
             }
             uint32_t gone = now - s_downedSince[id];
             uint32_t left = gone < coop::kBleedOutMs ? (coop::kBleedOutMs - gone + 999) / 1000 : 0;
-            friends.push_back({who, g_coop.NameOf(id) + "\nDOWNED " + std::to_string(left) + "s", true});
+            friends.push_back({who, g_coop.NameOf(id) + (dragged ? std::string("\nDOWNED, dragged") :
+                "\nDOWNED " + std::to_string(left) + "s"), true});
         }
         if (!g_coop.InGame())
             s_downedSince.clear();

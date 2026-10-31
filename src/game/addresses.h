@@ -343,6 +343,9 @@ namespace game::layout
     constexpr uint32_t kLifeStateUnconscious = 3;
     constexpr uint32_t kLifeStateEssentialDown = 6;
     constexpr int kControlActivate = 5;
+    constexpr int kControlAttack = 4, kControlAimBlock = 6, kControlReadyItem = 7, kControlRun = 9,
+        kControlAlwaysRun = 0x0A, kControlJump = 0x0C, kControlVats = 0x10, kControlGrab = 0x1B;
+    constexpr uint32_t kPlayerAlwaysRun = 0x651;
 }
 
 namespace game::steamslots

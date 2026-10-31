@@ -92,6 +92,8 @@ namespace coop
         m_hostModsDone = m_modsDiffer = m_downloading = false;
         m_explosions.clear();
         m_downedSince.clear();
+        m_drags.clear();
+        m_dragSince.clear();
         m_attacks.clear();
         m_gameOverSent = m_revived = m_gameOver = false;
         m_hostSaysFighting = false;
@@ -913,6 +915,14 @@ namespace coop
             return;
         }
 
+        if (type == MsgType::Drag)
+        {
+            net::Drag m;
+            if (Decode(r, m) && m.dragger == player.id)
+                HostDrag(m.dragger, m.target, m.on);
+            return;
+        }
+
         if (type == MsgType::Attack)
         {
             net::Attack m;
@@ -1366,6 +1376,18 @@ namespace coop
             m_revived = true;
             LOG_INFO("We were revived");
         }
+        else if (type == MsgType::Drag)
+        {
+            net::Drag m;
+            if (!Decode(r, m) || !IsPlayer(m.dragger) || !IsPlayer(m.target))
+                return;
+            auto it = m_drags.find(m.target);
+            if (m.on)
+                m_drags[m.target] = m.dragger;
+            else if (it != m_drags.end() && it->second == m.dragger)
+                m_drags.erase(it);
+            LOG_INFO("%s %s %s", NameOf(m.dragger).c_str(), m.on ? "drags" : "lets go of", NameOf(m.target).c_str());
+        }
         else if (type == MsgType::GameOver)
         {
             GameOver m;
@@ -1718,6 +1740,89 @@ namespace coop
                 m_net->Send(peer, Encode(net::Revive{target}), true);
     }
 
+    void Coop::Drag(uint8_t target, bool on)
+    {
+        if (m_role == Role::Host)
+            HostDrag(m_myId, target, on);
+        else if (InGame())
+            m_net->Send(1, Encode(net::Drag{m_myId, target, on}), true);
+    }
+
+    int Coop::DraggedBy(uint8_t target) const
+    {
+        auto it = m_drags.find(target);
+        return it != m_drags.end() ? it->second : -1;
+    }
+
+    int Coop::Dragging(uint8_t dragger) const
+    {
+        for (const auto& [target, by] : m_drags)
+            if (by == dragger)
+                return target;
+        return -1;
+    }
+
+    bool Coop::HealthOf(uint8_t playerId, float& health, float& maxHealth) const
+    {
+        if (playerId == m_myId)
+        {
+            health = m_myHealth, maxHealth = m_myMaxHealth;
+            return true;
+        }
+        auto it = m_remotes.find(playerId);
+        if (it == m_remotes.end())
+            return false;
+        health = it->second.health, maxHealth = it->second.maxHealth;
+        return true;
+    }
+
+    void Coop::HostDrag(uint8_t dragger, uint8_t target, bool on)
+    {
+        auto it = m_drags.find(target);
+        if (!on)
+        {
+            if (it != m_drags.end() && it->second == dragger)
+                EndDrag(target);
+            return;
+        }
+        float th = 0, tmax = 0, dh = 0, dmax = 0;
+        Pose tp, dp;
+        bool ok = dragger != target && it == m_drags.end() && Dragging(dragger) < 0 && HealthOf(target, th, tmax) &&
+            HealthOf(dragger, dh, dmax) && IsDowned(th, tmax) && !IsDowned(dh, dmax) && PoseOf(target, tp) &&
+            PoseOf(dragger, dp) && tp.space == dp.space;
+        float dx = tp.x - dp.x, dy = tp.y - dp.y, dz = tp.z - dp.z;
+        if (!ok || dx * dx + dy * dy + dz * dz > kReviveDistance * kReviveDistance)
+        {
+            LOG_INFO("Ignored a drag of player %u by %s (target down %d, dragger up %d, same place %d, %.0f apart, "
+                "dragged already %d)", target, NameOf(dragger).c_str(), IsDowned(th, tmax), !IsDowned(dh, dmax),
+                tp.space == dp.space, std::sqrt(dx * dx + dy * dy + dz * dz), it != m_drags.end());
+            return;
+        }
+        m_drags[target] = dragger;
+        m_dragSince[target] = GetTickCount();
+        LOG_INFO("%s drags %s", NameOf(dragger).c_str(), NameOf(target).c_str());
+        SendToJoined(Encode(net::Drag{dragger, target, true}), true);
+    }
+
+    void Coop::EndDrag(uint8_t target)
+    {
+        auto it = m_drags.find(target);
+        if (it == m_drags.end())
+            return;
+        uint8_t dragger = it->second;
+        m_drags.erase(it);
+        auto since = m_dragSince.find(target);
+        if (since != m_dragSince.end())
+        {
+            auto down = m_downedSince.find(target);
+            if (down != m_downedSince.end())
+                down->second += GetTickCount() - since->second;
+            m_dragSince.erase(since);
+        }
+        LOG_INFO("%s lets go of %s", NameOf(dragger).c_str(), NameOf(target).c_str());
+        SendToJoined(Encode(net::Drag{dragger, target, false}), true);
+    }
+
     void Coop::CheckDowned(uint32_t now)
     {
         std::map<uint8_t, uint32_t> since;
@@ -1738,12 +1843,22 @@ namespace coop
             check(id, remote.health, remote.maxHealth);
         m_downedSince = std::move(since);
 
+        std::vector<uint8_t> ended;
+        for (const auto& [target, dragger] : m_drags)
+        {
+            float h = 0, max = 0;
+            if (!m_downedSince.count(target) || !HealthOf(dragger, h, max) || IsDowned(h, max) || !IsPlayer(target))
+                ended.push_back(target);
+        }
+        for (uint8_t target : ended)
+            EndDrag(target);
+
         if (m_downedSince.empty())
             m_gameOverSent = false;
         if (m_gameOverSent || m_downedSince.empty())
             return;
         for (auto& [id, at] : m_downedSince)
-            if (now - at >= m_bleedOutMs)
+            if (now - at >= m_bleedOutMs && !m_drags.count(id))
                 return EndGame(GameOverReason::BledOut, id);
         if (m_downedSince.size() == players)
             EndGame(GameOverReason::AllDown, 0);
@@ -1921,7 +2036,7 @@ namespace coop
         std::string text = DescribeForScreen(d, "");
         m_modsWanted.clear();
         m_modsExtra = d.extra;
-        std::string unsendable;
+        std::string unsendable, ttw;
         uint64_t bytes = 0;
         for (size_t i = 0; i < m_hostMods.size(); ++i)
         {
@@ -1935,13 +2050,22 @@ namespace coop
                 bytes += f.size;
             }
             else if (needed)
-                unsendable += (unsendable.empty() ? "" : ", ") + f.name;
+            {
+                std::string& list = IsMadeFromOwnGame(f.name) ? ttw : unsendable;
+                list += (list.empty() ? "" : ", ") + f.name;
+            }
         }
-        if (!unsendable.empty())
+        if (!unsendable.empty() || !ttw.empty())
         {
-            LOG_WARN("Mods: the base game's own files differ (%s): not fixable from here", unsendable.c_str());
-            m_modReport = text + "\nThe game's own files differ (" + unsendable +
-                "): check them in Steam (the game's Properties, Installed Files, Verify).";
+            LOG_WARN("Mods: the game's own files differ (%s%s%s): not fixable from here", unsendable.c_str(),
+                !unsendable.empty() && !ttw.empty() ? ", " : "", ttw.c_str());
+            m_modReport = text;
+            if (!unsendable.empty())
+                m_modReport += "\nThe game's own files differ (" + unsendable +
+                    "): check them in Steam (the game's Properties, Installed Files, Verify).";
+            if (!ttw.empty())
+                m_modReport += "\nTale of Two Wastelands' files differ (" + ttw + "): install the same TTW version as "
+                    "the host (its installer makes them from your own Fallout 3).";
             return Stop();
         }
         char size[32];

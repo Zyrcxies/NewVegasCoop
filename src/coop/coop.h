@@ -218,6 +218,9 @@ namespace coop
         float TakeDamage() { float d = m_damage; m_damage = 0; return d; }
         void Revive(uint8_t playerId);
         bool TakeRevived() { bool r = m_revived; m_revived = false; return r; }
+        void Drag(uint8_t target, bool on);
+        int DraggedBy(uint8_t target) const;
+        int Dragging(uint8_t dragger) const;
         bool TakeGameOver(net::GameOver& out);
         bool TakeTravel(Pose& out, uint8_t& leader);
         void ForgetMyPlace();
@@ -352,6 +355,9 @@ namespace coop
         void CheckDowned(uint32_t now);
         void EndGame(net::GameOverReason reason, uint8_t playerId);
         void HostRevive(uint8_t reviver, uint8_t target);
+        void HostDrag(uint8_t dragger, uint8_t target, bool on);
+        void EndDrag(uint8_t target);
+        bool HealthOf(uint8_t playerId, float& health, float& maxHealth) const;
         bool PoseOf(uint8_t playerId, Pose& out) const;
         void CheckMyTravel(uint32_t now);
         void GroupTravels(uint8_t leader, const Pose& to, uint32_t now);
@@ -386,6 +392,8 @@ namespace coop
         bool m_gameOver = false;
         net::GameOver m_gameOverInfo;
         std::map<uint8_t, uint32_t> m_downedSince;
+        std::map<uint8_t, uint8_t> m_drags;
+        std::map<uint8_t, uint32_t> m_dragSince;
         bool m_gameOverSent = false;
         uint32_t m_bleedOutMs = kBleedOutMs;
         Pose m_place;

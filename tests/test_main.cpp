@@ -514,6 +514,81 @@ TEST(downed_players_are_revived_only_up_close)
     host.Stop();
 }
 
+TEST(downed_players_are_dragged_up_close_and_dont_bleed_out_meanwhile)
+{
+    MsgType type;
+    net::Drag m;
+    Bytes self = Encode(net::Drag{1, 1, true});
+    Reader r1(self);
+    CHECK(r1.Type(type) && type == MsgType::Drag && !Decode(r1, m));
+    Bytes ok = Encode(net::Drag{2, 3, true});
+    Reader r2(ok);
+    CHECK(r2.Type(type) && Decode(r2, m) && m.dragger == 2 && m.target == 3 && m.on);
+
+    coop::Coop host, a;
+    CHECK(host.Host(kTestPort, "Host"));
+    CHECK(a.Join("127.0.0.1", kTestPort, "A"));
+    CHECK(RunUntil({&host, &a}, [&] { return a.GetFriendState() == coop::FriendState::Joined; }));
+    uint8_t id = a.MyPlayerId();
+    host.SetMyHealth(80, 100);
+    host.SetMyPose({5, 1000, 0, 0, 0});
+    a.SetMyPose({5, 0, 0, 0, 0});
+    a.SetMyHealth(0, 100);
+    coop::Pose p;
+    CHECK(RunUntil({&host, &a}, [&] {
+        auto it = host.Remotes().find(id);
+        return it != host.Remotes().end() && it->second.Downed() && it->second.motion.Sample(GetTickCount(), p) &&
+            a.Remotes().count(0) && !a.Remotes().at(0).Downed();
+    }));
+
+    host.Drag(id, true);
+    RunUntil({&host, &a}, [&] { return false; }, 200);
+    CHECK(host.DraggedBy(id) == -1 && a.DraggedBy(id) == -1);
+
+    host.SetBleedOutMs(300);
+    host.SetMyPose({5, 100, 0, 0, 0});
+    host.Drag(id, true);
+    CHECK(host.DraggedBy(id) == 0 && host.Dragging(0) == id);
+    CHECK(RunUntil({&host, &a}, [&] { return a.DraggedBy(id) == 0; }));
+    a.Drag(0, true);
+    RunUntil({&host, &a}, [&] { return false; }, 600);
+    net::GameOver out;
+    CHECK(!host.TakeGameOver(out) && !a.TakeGameOver(out) && host.DraggedBy(0) == -1);
+
+    host.Drag(id, false);
+    CHECK(RunUntil({&host, &a}, [&] { return a.DraggedBy(id) == -1; }));
+    CHECK(RunUntil({&host, &a}, [&] { return a.TakeGameOver(out); }));
+    CHECK(out.reason == GameOverReason::BledOut && out.playerId == id);
+    a.Stop();
+    host.Stop();
+}
+
+TEST(a_drag_ends_when_they_are_revived)
+{
+    coop::Coop host, a;
+    CHECK(host.Host(kTestPort, "Host"));
+    CHECK(a.Join("127.0.0.1", kTestPort, "A"));
+    CHECK(RunUntil({&host, &a}, [&] { return a.GetFriendState() == coop::FriendState::Joined; }));
+    uint8_t id = a.MyPlayerId();
+    a.SetMyHealth(90, 100);
+    a.SetMyPose({5, 50, 0, 0, 0});
+    host.SetMyPose({5, 0, 0, 0, 0});
+    host.SetMyHealth(0, 100);
+    coop::Pose p;
+    CHECK(RunUntil({&host, &a}, [&] {
+        auto it = host.Remotes().find(id);
+        return it != host.Remotes().end() && it->second.motion.Sample(GetTickCount(), p) && it->second.maxHealth > 0 &&
+            a.Remotes().count(0) && a.Remotes().at(0).Downed();
+    }));
+    a.Drag(0, true);
+    CHECK(RunUntil({&host, &a}, [&] { return host.DraggedBy(0) == id && a.Dragging(id) == 0; }));
+    a.Revive(0);
+    CHECK(RunUntil({&host, &a}, [&] { return host.TakeRevived(); }));
+    CHECK(RunUntil({&host, &a}, [&] { return host.DraggedBy(0) == -1 && a.DraggedBy(0) == -1; }));
+    a.Stop();
+    host.Stop();
+}
+
 TEST(a_revived_host_is_up_straight_away)
 {
     coop::Coop host, a;
@@ -2704,6 +2779,33 @@ TEST(mod_lists_round_trip_and_bad_names_are_dropped)
     CHECK(cr.Type(t) && !Decode(cr, got));
 }
 
+TEST(tale_of_two_wastelands_files_count_by_name_or_size_and_are_never_sent)
+{
+    CHECK(coop::IsMadeFromOwnGame("TaleOfTwoWastelands.esm") && coop::IsMadeFromOwnGame("taleoftwowastelands - main.bsa"));
+    CHECK(coop::IsMadeFromOwnGame("YUPTTW.esm") && coop::IsMadeFromOwnGame("ThePitt - Sounds.bsa"));
+    CHECK(!coop::IsMadeFromOwnGame("Cool Mod.esp") && !coop::IsMadeFromOwnGame("Cool Mod - Main.bsa"));
+    CHECK(!coop::IsMadeFromOwnGame("Fallout - Meshes.bsa"));
+    using net::ModKind;
+    auto file = [](const char* name, ModKind kind, uint64_t size) {
+        net::ModFile f;
+        f.name = name;
+        f.kind = kind;
+        f.size = size;
+        return f;
+    };
+    coop::ModList host{file("FalloutNV.esm", ModKind::Plugin, 100), file("TaleOfTwoWastelands.esm", ModKind::Plugin, 500),
+        file("TaleOfTwoWastelands - Main.bsa", ModKind::Archive, 690142)};
+    coop::ModList mine = host;
+    mine[2].size = 675327;
+    CHECK(!coop::CompareMods(host, mine).Any() && coop::ModsFingerprint(host) == coop::ModsFingerprint(mine));
+    mine[1].size = 499;
+    CHECK(coop::CompareMods(host, mine).different.size() == 1);
+    mine = host;
+    mine.pop_back();
+    CHECK(coop::CompareMods(host, mine).missing.size() == 1);
+    CHECK(coop::ModsFingerprint(host) != coop::ModsFingerprint(mine));
+}
+
 TEST(mod_differences_are_found_and_described)
 {
     using net::ModKind;
@@ -2797,8 +2899,18 @@ TEST(the_mod_scan_finds_what_the_game_loads)
     coop::ModList again = coop::ScanMods(data, {"FalloutNV.esm", "Cool Mod.esp"}, cache, "nvcoop.dll");
     CHECK(coop::ModsFingerprint(again) == coop::ModsFingerprint(mods) && !coop::CompareMods(mods, again).Any());
 
+    write(data + "TaleOfTwoWastelands.esm", "ttw");
+    write(data + "TaleOfTwoWastelands - Main.bsa", "fallout 3's");
+    coop::ModList ttw = coop::ScanMods(data, {"FalloutNV.esm", "TaleOfTwoWastelands.esm"}, cache, "nvcoop.dll");
+    CHECK(ttw.size() == 5);
+    if (ttw.size() == 5)
+    {
+        CHECK(ttw[1].name == "TaleOfTwoWastelands.esm" && !ttw[1].hashed && ttw[1].size == 3);
+        CHECK(ttw[3].name == "TaleOfTwoWastelands - Main.bsa" && ttw[3].kind == net::ModKind::Archive && !ttw[3].hashed);
+    }
+
     for (const char* f : {"FalloutNV.esm", "Cool Mod.esp", "Cool Mod - Main.bsa", "Fallout - Misc.bsa", "Unused.bsa",
-        "Off.esp", "hashes.txt"})
+        "Off.esp", "hashes.txt", "TaleOfTwoWastelands.esm", "TaleOfTwoWastelands - Main.bsa"})
         DeleteFileA((data + f).c_str());
     DeleteFileA((dlls + "jip_nvse.dll").c_str());
     DeleteFileA((dlls + "NVCoop.dll").c_str());

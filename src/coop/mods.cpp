@@ -36,6 +36,8 @@ namespace coop
 
         bool SameFile(const ModFile& a, const ModFile& b)
         {
+            if (a.kind == ModKind::Archive && IsMadeFromOwnGame(a.name))
+                return true;
             return a.size == b.size && (!a.hashed || !b.hashed || a.hash == b.hash);
         }
     }
@@ -44,6 +46,17 @@ namespace coop
     {
         std::string a = Lower(archive);
         return a == "update.bsa" || (a.rfind("fallout - ", 0) == 0 && EndsWith(a, ".bsa"));
+    }
+
+    bool IsMadeFromOwnGame(const std::string& name)
+    {
+        static const char* const kMasters[] = {"taleoftwowastelands.esm", "yupttw.esm", "anchorage.esm", "thepitt.esm",
+            "brokensteel.esm", "pointlookout.esm", "zeta.esm"};
+        std::string n = Lower(name);
+        for (const char* master : kMasters)
+            if (n == master || ArchiveBelongsTo(n, master))
+                return true;
+        return false;
     }
 
     bool ArchiveBelongsTo(const std::string& archive, const std::string& plugin)
@@ -65,6 +78,8 @@ namespace coop
             uint8_t kind = static_cast<uint8_t>(f.kind), hashed = f.hashed ? 1 : 0;
             h.Add(&kind, 1);
             h.Add(name.c_str(), name.size() + 1);
+            if (f.kind == ModKind::Archive && IsMadeFromOwnGame(f.name))
+                continue;
             h.Add(&f.size, sizeof(f.size));
             h.Add(&hashed, 1);
             if (f.hashed)
@@ -302,10 +317,10 @@ namespace coop
         };
 
         for (const std::string& plugin : plugins)
-            add(data, plugin, ModKind::Plugin, !IsGameFile(plugin));
+            add(data, plugin, ModKind::Plugin, !IsGameFile(plugin) && !IsMadeFromOwnGame(plugin));
         for (const std::string& archive : FilesIn(data, "*.bsa"))
         {
-            bool game = IsGameArchive(archive), loaded = game;
+            bool game = IsGameArchive(archive) || IsMadeFromOwnGame(archive), loaded = IsGameArchive(archive);
             for (const std::string& plugin : plugins)
                 if (ArchiveBelongsTo(archive, plugin))
                 {

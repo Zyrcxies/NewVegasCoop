@@ -12,6 +12,7 @@ namespace coop
     using ModList = std::vector<net::ModFile>;
 
     bool IsGameArchive(const std::string& archive);
+    bool IsMadeFromOwnGame(const std::string& name);
     bool ArchiveBelongsTo(const std::string& archive, const std::string& plugin);
 
     net::Hash ModsFingerprint(const ModList& mods);
